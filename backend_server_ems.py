@@ -3,11 +3,15 @@ from geopy.distance import geodesic  # type: ignore
 import math
 import os
 import uvicorn
+import certifi
+import ssl 
+
 
 app = FastAPI()
 # ====== ENVIRONMENT VARIABLES ======
-API_TOKEN = os.getenv("API_TOKEN")  # must be set on Render / host
-
+API_TOKEN = os.getenv("Test123")  # must be set on Render / host
+SERVER_URL = "wss://ems_alert_backend.onrender.com"
+ssl_context = ssl.create_default_context(cafile=certifi.where())
 @app.get("/")
 def root(): 
     return{"status": "EMS server running"}
