@@ -1,0 +1,43 @@
+[
+    {
+        "type": "w",
+        "location": "w",
+        "severity": "w",
+        "priority": "w",
+        "time": "2025-12-14 01:56:34",
+        "status": "Active"
+    },
+    {
+        "type": "Medical",
+        "location": "winter havne",
+        "severity": "hgih",
+        "priority": "high",
+        "time": "2025-12-14 01:56:54",
+        "status": "Active"
+    },
+    {
+        "type": "Medical",
+        "location": "winter Haven ",
+        "severity": "high",
+        "priority": "high",
+        "time": "2025-12-14 01:57:12",
+        "status": "Active"
+    },
+    {
+        "type": "Medical",
+        "location": "winter haven",
+        "severity": "hgih",
+        "priority": "high",
+        "description": "sick person ",
+        "time": "2025-12-14 02:05:10",
+        "status": "Active"
+    },
+    {
+        "type": "medical",
+        "location": "winter hvaen",
+        "severity": "high",
+        "description": "cardiac arrest",
+        "time": "2025-12-14 16:03:45",
+        "status": "Dispatched"
+    }
+]

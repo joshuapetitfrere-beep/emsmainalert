@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PulseAlert Dashboard</title>
+<style>
+body { font-family: Arial; background: #f5f5f5; padding: 20px; }
+.card {
+    background: white;
+    border-radius: 8px;
+    padding: 15px;
+    margin: 10px 0;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+}
+.critical { border-left: 5px solid red; }
+.high { border-left: 5px solid orange; }
+.medium { border-left: 5px solid yellow; }
+.safe { border-left: 5px solid green; }
+</style>
+</head>
+<body>
+<h1>PulseAlert Dashboard</h1>
+<div id="dashboard"></div>
+
+<script>
+const dashboard = document.getElementById("dashboard");
+const incidents = {}; // track incidents by ID
+
+// Connect to WebSocket backend
+const socket = new WebSocket("ws://localhost:6789");
+
+socket.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    if(data.action === "new"){
+        const incident = data.incident;
+        const card = document.createElement("div");
+        card.className = `card ${incident.priority}`;
+        card.id = `incident-${incident.id}`;
+        card.innerHTML = `
+            <strong>${incident.type}</strong><br>
+            Location: ${incident.location.lat.toFixed(3)}, ${incident.location.lon.toFixed(3)}<br>
+            <em>${incident.timestamp}</em>
+        `;
+        dashboard.prepend(card); // newest on top
+        incidents[incident.id] = card;
+    } else if(data.action === "resolve"){
+        const card = incidents[data.incidentId];
+        if(card){
+            card.remove();
+            delete incidents[data.incidentId];
+        }
+    }
+};
+
+socket.onopen = () => console.log("Connected to WebSocket server");
+socket.onclose = () => console.log("WebSocket closed");
+socket.onerror = (err) => console.error("WebSocket error", err);
+</script>
+</body>
+</html>

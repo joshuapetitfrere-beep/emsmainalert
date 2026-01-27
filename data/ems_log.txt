@@ -1,0 +1,5 @@
+[2025-12-14 01:56:34.402499] Added alert: w at w with severity w
+[2025-12-14 01:56:54.005114] Added alert: Medical at winter havne with severity hgih
+[2025-12-14 01:57:12.248430] Added alert: Medical at winter Haven  with severity high
+[2025-12-14 02:05:10.563925] Added alert: Medical at winter haven with severity hgih
+[2025-12-14 16:03:45.199411] Added alert: medical at winter hvaen with severity high

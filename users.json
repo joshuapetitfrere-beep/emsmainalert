@@ -1,0 +1,17 @@
+[
+  {
+    "name": "Alice",
+    "latitude": 28.037,
+    "longitude": -81.732
+  },
+  {
+    "name": "Bob",
+    "latitude": 28.042,
+    "longitude": -81.735
+  },
+  {
+    "name": "Charlie",
+    "latitude": 28.045,
+    "longitude": -81.73
+  }
+]

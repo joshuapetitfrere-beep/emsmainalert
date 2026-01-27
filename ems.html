@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EMS Main Alert</title>
+</head>
+<body> 
+    <h1>EMS Priority Queue Dashboard</h1>
+    <div id="root"></div>
+    <script src="ems_priority_queue.js"></script>
+    <script>
+        // Assuming ems_priority_queue.js exports a React component named EMSPriorityQueue
+        const { EMSPriorityQueue } = window;
+
+        ReactDOM.render(
+            React.createElement(EMSPriorityQueue, null, null),
+            document.getElementById('root')
+        );
+    </script>
+</body>
+</html>
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+import './ems_priority_queue.css';
+</head>
+<body> 
+    <h2>Active EMS Alerts</h2>
+</body>
