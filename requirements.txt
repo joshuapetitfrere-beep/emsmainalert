@@ -1,3 +1,11 @@
+fastapi==0.112.0
+uvicorn==0.25.0
+geopy==2.3.0
+
+
+
+
 fastapi 
 uvicorn 
 websockets 
+geopy
