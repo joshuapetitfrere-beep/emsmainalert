@@ -25,11 +25,12 @@ async def civilian_client():
     async with websockets.connect(SERVER_URL) as wss:
         # Register as civilian
         await wss.send(json.dumps({
-
+            "token": "Test123",
             "id": "civilian_1",
             "role": "civilian",
             "lat": 27.995,
             "lon": -81.761,
+            "ack": False
         }))
 
         print("✅ Civilian connected, waiting for alerts...")
