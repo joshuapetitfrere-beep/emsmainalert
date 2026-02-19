@@ -1,23 +1,32 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from geopy.distance import geodesic  # type: ignore
+from fastapi.middleware.cors import CORSMiddleware
+from geopy.distance import geodesic
 import math
 import os
-import uvicorn
-import certifi
-import ssl 
-
 
 app = FastAPI()
+
 # ====== ENVIRONMENT VARIABLES ======
-API_TOKEN = os.getenv("Test123")  # must be set on Render / host
-SERVER_URL = "wss://ems_alert_backend.onrender.com"
-ssl_context = ssl.create_default_context(cafile=certifi.where())
+API_TOKEN = os.getenv("API_TOKEN")  # set this in Render dashboard
+
+# ====== CORS (FastAPI-native, not Flask) ======
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # tighten later if needed
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ====== HEALTH / TEST ROUTES ======
 @app.get("/")
-def root(): 
-    return{"status": "EMS server running"}
+def root():
+    return {"status": "EMS server running"}
+
 @app.get("/test")
-def test(): 
+def test():
     return {"message": "hello world"}
+
 # ====== STATE ======
 clients = {}  # client_id -> client data
 
@@ -50,17 +59,17 @@ def severity(distance_m):
         return "MODERATE"
     else:
         return None
-
-
 # ====== WEBSOCKET ======
 @app.websocket("/ws")
-async def websocket_endpoint(wss: WebSocket):
-    await wss.accept()
+async def websocket_endpoint(ws: WebSocket):
+    await ws.accept()
     print("🔌 WebSocket connected")
+
+    client_id = None
 
     try:
         # ----- HANDSHAKE -----
-        data = await wss.receive_json()
+        data = await ws.receive_json()
 
         token = data.get("token")
         client_id = data.get("id")
@@ -68,16 +77,16 @@ async def websocket_endpoint(wss: WebSocket):
 
         if token != API_TOKEN:
             print("❌ Invalid token")
-            await wss.close(code=1008)
+            await ws.close(code=1008)
             return
 
         if role not in ("ems", "civilian"):
             print("❌ Invalid role")
-            await wss.close(code=1003)
+            await ws.close(code=1003)
             return
 
         clients[client_id] = {
-            "wss": wss,
+            "ws": ws,
             "role": role,
             "lat": None,
             "lon": None,
@@ -88,7 +97,7 @@ async def websocket_endpoint(wss: WebSocket):
 
         # ----- MAIN LOOP -----
         while True:
-            msg = await wss.receive_json()
+            msg = await ws.receive_json()
 
             # === CIVILIAN LOCATION UPDATE ===
             if role == "civilian":
@@ -99,7 +108,7 @@ async def websocket_endpoint(wss: WebSocket):
                     clients[client_id]["ack"] = True
 
             # === EMS LOCATION UPDATE ===
-            if role == "ems":
+            elif role == "ems":
                 ems_state["lat"] = msg.get("lat")
                 ems_state["lon"] = msg.get("lon")
                 ems_state["active"] = True
@@ -134,5 +143,5 @@ async def websocket_endpoint(wss: WebSocket):
         print("⚠️ WebSocket error:", e)
 
     finally:
-        if client_id in clients:
-            del clients[client_id]
+        if client_id and client_id in clients:
+         del clients[client_id]
