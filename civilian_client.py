@@ -25,7 +25,7 @@ def speak(message):
 async def civilian_client():
     global acknowledged
 
-    async with websockets.connect(SERVER_URL) as wss:
+    async with websockets.connect(SERVER_URL, ssl=ssl_context) as wss:
         # ----- HANDSHAKE -----
         handshake = {
             "token": API_TOKEN,

@@ -10,7 +10,7 @@ CLIENT_ID = "ems1"
 ROLE = "ems"
 
 async def ems():
-    async with websockets.connect(SERVER_URL) as wss:
+    async with websockets.connect(SERVER_URL, ssl=ssl_context) as wss:
         # ----- HANDSHAKE -----
         handshake = {
             "id": CLIENT_ID,
