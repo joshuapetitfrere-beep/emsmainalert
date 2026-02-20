@@ -1,8 +1,10 @@
 import asyncio
 import json
 import websockets
+import ssl 
 
 SERVER_URL = "wss://ems-alert-backend.onrender.com/ws"  # Render server
+ssl_context = ssl.create_default_context() 
 API_TOKEN = "Test123"
 CLIENT_ID = "ems1"
 ROLE = "ems"

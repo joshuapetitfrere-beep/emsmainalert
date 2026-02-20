@@ -2,11 +2,13 @@ import asyncio
 import json
 import pyttsx3
 import websockets
+import ssl 
 
 # Text-to-speech engine
 tts = pyttsx3.init()
 
 SERVER_URL = "wss://ems-alert-backend.onrender.com/ws"
+ssl_context = ssl.create_default_context() 
 API_TOKEN = "Test123"
 CLIENT_ID = "civilian_1"
 ROLE = "civilian"
