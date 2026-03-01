@@ -7,7 +7,7 @@ import os
 app = FastAPI()
 
 # ====== ENVIRONMENT VARIABLES ======
-API_TOKEN = os.getenv("API_TOKEN")  # set this in Render dashboard
+API_TOKEN = os.getenv("rnd_yB4ogdS1xJKwiON50LKUhRQ5vTa2")  # set this in Render dashboard
 
 # ====== CORS (FastAPI-native, not Flask) ======
 app.add_middleware(
