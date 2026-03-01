@@ -52,6 +52,14 @@ async def keep_alive(ws, stop_event: asyncio.Event):
         print("⚠️ Keep-alive error:", e)
 
 # ---------------- CLIENT ----------------
+async def ws_handler(ws): 
+    if ws.path != "/ws": 
+        await ws.close() 
+        return 
+
+
+
+
 async def ems_client():
     stop_event = asyncio.Event()
 
