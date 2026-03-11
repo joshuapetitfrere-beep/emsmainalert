@@ -1,4 +1,3 @@
-cat > /Users/joshuasmac/Desktop/emsmainalert/main.py << 'ENDOFFILE'
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from typing import List, Optional
 from math import radians, cos, sin, asin, sqrt
@@ -151,4 +150,3 @@ async def status():
 @app.get("/alerts")
 async def get_alerts():
     return {"alerts": alert_log[-20:]}
-ENDOFFILE
