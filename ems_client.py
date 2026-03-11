@@ -1,97 +1,149 @@
 import asyncio
 import json
 import websockets
-import ssl
+import httpx
 
 # ---------------- CONFIG ----------------
-SERVER_URL = "wss://ems-alert-backend.onrender.com/ws"
-API_TOKEN = "Test123"
-CLIENT_ID = "ems1"
-ROLE = "ems"
+# For local testing:  http://localhost:8000  /  ws://localhost:8000/ws
+# For Railway:        https://your-app.up.railway.app
+SERVER_HTTP = "http://localhost:8000"
+SERVER_WS   = "ws://localhost:8000/ws"
 
-START_LAT = 27.994
-START_LON = -81.760
+EMS_UNIT_ID = "POLK-RESCUE-1"   # Change per unit/vehicle
 
-LOCATION_INTERVAL = 2     # seconds
-RECV_TIMEOUT = 30         # seconds (safety)
-MAX_RUNTIME = None        # set to seconds if you want auto-exit
+# EMS vehicle coordinates — in production these come from GPS hardware
+EMS_LAT = 27.994
+EMS_LON = -81.760
 
-ssl_context = ssl.create_default_context()
+ALERT_RADIUS_MILES = 2.0
 
-# ---------------- TASKS ----------------
-async def send_location(ws, stop_event: asyncio.Event):
-    lat, lon = START_LAT, START_LON
-    try:
-        while not stop_event.is_set():
-            await ws.send(json.dumps({
-                "lat": lat,
-                "lon": lon
-            }))
+# ---------------- PRESET MESSAGES ----------------
+PRESETS = {
+    "1": "Emergency vehicle responding. Please pull to the right and stop.",
+    "2": "Fire apparatus en route. Pull right, stop, and wait.",
+    "3": "Ambulance responding to medical emergency. Please yield immediately.",
+    "4": "Law enforcement vehicle responding. Pull to the right.",
+    "5": "All clear. Thank you for yielding.",
+}
 
-            lat += 0.00001  # simulate movement
-            await asyncio.sleep(LOCATION_INTERVAL)
-
-    except asyncio.CancelledError:
-        pass
-    except Exception as e:
-        print("⚠️ Location sender error:", e)
-
-async def keep_alive(ws, stop_event: asyncio.Event):
+# ---------------- ALERT TRIGGER (HTTP) ----------------
+async def trigger_alert(message: str):
     """
-    Optional listener to prevent dead sockets and detect disconnects.
+    Sends alert via HTTP POST to /trigger-alert.
+    Server handles WebSocket broadcast + Expo push to offline devices.
+    """
+    params = {
+        "lat": EMS_LAT,
+        "lon": EMS_LON,
+        "alert_message": message,
+        "radius": ALERT_RADIUS_MILES,
+        "ems_unit_id": EMS_UNIT_ID,
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{SERVER_HTTP}/trigger-alert",
+                params=params,
+                timeout=10.0,
+            )
+            result = resp.json()
+            print(f"\n✅ Alert sent!")
+            print(f"   Alert ID  : {result.get('alert_id')}")
+            print(f"   WS sent   : {result.get('ws_delivered')} devices")
+            print(f"   Push sent : {result.get('push_delivered')} devices\n")
+    except Exception as e:
+        print(f"❌ Failed to send alert: {e}")
+
+# ---------------- STATUS CHECK ----------------
+async def fetch_status():
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(f"{SERVER_HTTP}/status", timeout=5.0)
+            data = resp.json()
+            print(f"\n📡 Server Status")
+            print(f"   Connected civilians : {data.get('connected_clients')}")
+            print(f"   Offline tokens      : {data.get('offline_tokens')}")
+            print(f"   Total alerts sent   : {data.get('total_alerts_sent')}\n")
+    except Exception as e:
+        print(f"❌ Could not reach server: {e}")
+
+# ---------------- WEBSOCKET (for receiving ACKs live) ----------------
+async def listen_for_acks(stop_event: asyncio.Event):
+    """
+    Optional: connect via WebSocket to receive live ACK confirmations.
+    In production this would update a dispatcher dashboard.
     """
     try:
-        while not stop_event.is_set():
-            try:
-                await asyncio.wait_for(ws.recv(), timeout=RECV_TIMEOUT)
-            except asyncio.TimeoutError:
-                continue
-    except asyncio.CancelledError:
-        pass
+        async with websockets.connect(SERVER_WS, ping_interval=20) as ws:
+            print("📻 Listening for live ACKs from civilians...\n")
+            while not stop_event.is_set():
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=5)
+                    data = json.loads(raw)
+                    # EMS client doesn't act on ems_alert messages — just log
+                    print(f"[WS] Received: {data}")
+                except asyncio.TimeoutError:
+                    continue
     except Exception as e:
-        print("⚠️ Keep-alive error:", e)
+        print(f"⚠️  WS listener error: {e}")
 
-# ---------------- CLIENT ----------------
-
-
-
+# ---------------- MAIN DISPATCHER LOOP ----------------
 async def ems_client():
+    print("="*50)
+    print(f"  EMS DISPATCH CLIENT")
+    print(f"  Unit     : {EMS_UNIT_ID}")
+    print(f"  Location : {EMS_LAT}, {EMS_LON}")
+    print(f"  Server   : {SERVER_HTTP}")
+    print("="*50)
+
+    # Check server status on startup
+    await fetch_status()
+
     stop_event = asyncio.Event()
 
+    # Start ACK listener in background
+    ack_task = asyncio.create_task(listen_for_acks(stop_event))
+
     try:
-        async with websockets.connect(
-            SERVER_URL,
-            ssl=ssl_context,
-            ping_interval=20,
-            ping_timeout=20
-        ) as ws:
+        while True:
+            print("── SEND ALERT ──────────────────────────────")
+            print("  Presets:")
+            for key, msg in PRESETS.items():
+                print(f"  [{key}] {msg}")
+            print("  [c] Custom message")
+            print("  [s] Server status")
+            print("  [q] Quit")
+            print("────────────────────────────────────────────")
 
-            # ----- HANDSHAKE -----
-            await ws.send(json.dumps({
-                "id": CLIENT_ID,
-                "role": ROLE,
-                "token": API_TOKEN
-            }))
-            print("✅ EMS connected and transmitting location")
+            choice = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: input("Choice: ").strip().lower()
+            )
 
-            # ----- TASKS -----
-            location_task = asyncio.create_task(send_location(ws, stop_event))
-            keepalive_task = asyncio.create_task(keep_alive(ws, stop_event))
-
-            if MAX_RUNTIME:
-                await asyncio.sleep(MAX_RUNTIME)
+            if choice == "q":
+                break
+            elif choice == "s":
+                await fetch_status()
+            elif choice == "c":
+                msg = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: input("Custom message: ").strip()
+                )
+                if msg:
+                    await trigger_alert(msg)
+            elif choice in PRESETS:
+                await trigger_alert(PRESETS[choice])
             else:
-                await asyncio.gather(location_task, keepalive_task)
+                print("⚠️  Invalid choice\n")
 
-    except Exception as e:
-        print("❌ EMS connection error:", e)
+    except KeyboardInterrupt:
+        pass
     finally:
         stop_event.set()
-        print("🛑 EMS client shutting down")
+        ack_task.cancel()
+        print("🛑 EMS client shut down")
 
 # ---------------- ENTRY ----------------
 if __name__ == "__main__":
     try:
         asyncio.run(ems_client())
     except KeyboardInterrupt:
-        print("👋 EMS client interrupted")
+        print("\n👋 Interrupted by user")

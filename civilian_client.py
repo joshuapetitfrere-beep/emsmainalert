@@ -1,126 +1,140 @@
 import asyncio
 import json
-import pyttsx3
 import websockets
 import ssl
-import contextlib
+
+# ── Try to import TTS (optional — skips gracefully if not installed) ──────────
+try:
+    import pyttsx3
+    tts = pyttsx3.init()
+    def speak(message: str):
+        tts.say(message)
+        tts.runAndWait()
+    TTS_AVAILABLE = True
+except Exception:
+    TTS_AVAILABLE = False
+    def speak(message: str):
+        pass  # silently skip TTS if unavailable
 
 # ---------------- CONFIG ----------------
-SERVER_URL = "wss://ems-alert-backend.onrender.com/ws"
-API_TOKEN = "Test123"
-CLIENT_ID = "civilian_1"
-ROLE = "civilian"
+# For local testing:  ws://YOUR_LOCAL_IP:8000/ws
+# For Railway:        wss://your-app.up.railway.app/ws
+SERVER_URL = "ws://localhost:8000/ws"
 
-CIVILIAN_LAT = 27.995
-CIVILIAN_LON = -81.761
+CLIENT_ID      = "civilian_1"
+CIVILIAN_LAT   = 27.995       # Replace with real or test coordinates
+CIVILIAN_LON   = -81.761      # Polk County area
 
-LOCATION_INTERVAL = 5        # seconds
-RECV_TIMEOUT = 30            # seconds
-MAX_RUNTIME = None           # set to seconds if you want auto-exit
+LOCATION_INTERVAL = 5         # seconds between GPS updates
+RECV_TIMEOUT      = 30        # seconds before timeout (keeps connection alive)
 
-ssl_context = ssl.create_default_context()
+# For local dev, skip SSL. Switch to ssl.create_default_context() on Railway.
+SSL_CONTEXT = None
 
-# ---------------- TTS ----------------
-tts = pyttsx3.init()
-
-def speak(message: str):
-    tts.say(message)
-    tts.runAndWait()
-
-# ---------------- CLIENT ----------------
+# ---------------- LOCATION SENDER ----------------
 async def send_location(ws, stop_event: asyncio.Event):
-    """Send civilian location periodically until stopped"""
+    """
+    Sends GPS coordinates to server every LOCATION_INTERVAL seconds.
+    Server uses these for geofence filtering — only alerts nearby civilians.
+    Message type matches server's 'update' handler.
+    """
     try:
         while not stop_event.is_set():
             await ws.send(json.dumps({
+                "type": "update",           # ← matches server msg_type == "update"
                 "lat": CIVILIAN_LAT,
                 "lon": CIVILIAN_LON,
-                "ack": False
             }))
             await asyncio.sleep(LOCATION_INTERVAL)
     except asyncio.CancelledError:
         pass
     except Exception as e:
-        print("⚠️ Location sender error:", e)
+        print(f"⚠️  Location sender error: {e}")
 
+# ---------------- ALERT LISTENER ----------------
 async def listen_for_alerts(ws, stop_event: asyncio.Event):
-    """Listen for alerts with timeout protection"""
+    """
+    Listens for EMS alerts from the server.
+    When received, announces via TTS and prompts user to acknowledge.
+    Sends ACK back to server with the specific alert_id.
+    """
     try:
         while not stop_event.is_set():
             try:
-                msg = await asyncio.wait_for(ws.recv(), timeout=RECV_TIMEOUT)
+                raw = await asyncio.wait_for(ws.recv(), timeout=RECV_TIMEOUT)
             except asyncio.TimeoutError:
-                # keep connection alive without blocking forever
+                continue  # no alert yet, keep waiting
+
+            data = json.loads(raw)
+
+            # Only handle EMS alerts (ignore other message types if added later)
+            if data.get("type") != "ems_alert":
                 continue
 
-            data = json.loads(msg)
+            alert_id  = data.get("alert_id", "unknown")
+            message   = data.get("message", "Emergency vehicle approaching.")
+            ems_unit  = data.get("ems_unit", "EMS")
 
-            severity = data.get("severity")
-            distance = round(data.get("distance_m", 0), 1)
-            bearing_angle = round(data.get("bearing", 0), 0)
+            print("\n" + "="*50)
+            print(f"🚨 ALERT from {ems_unit}")
+            print(f"   {message}")
+            print(f"   Alert ID: {alert_id}")
+            print("="*50)
 
-            if severity == "IMMEDIATE":
-                alert_msg = (
-                    f"EMERGENCY VEHICLE IMMEDIATELY APPROACHING. "
-                    f"{distance} meters. Yield now."
-                )
-            elif severity == "HIGH":
-                alert_msg = (
-                    f"Emergency vehicle approaching from "
-                    f"{bearing_angle} degrees. Prepare to yield."
-                )
-            elif severity == "MODERATE":
-                alert_msg = f"Emergency vehicle nearby. Distance {distance} meters."
-            else:
-                continue
+            speak(f"Alert. {message}")
 
-            print(f"🚨 ALERT: {alert_msg}")
-            speak(alert_msg)
+            # Prompt for acknowledgement (non-blocking via thread executor)
+            loop = asyncio.get_event_loop()
+            user_input = await loop.run_in_executor(
+                None, lambda: input("Press A + Enter to acknowledge: ")
+            )
 
-            await asyncio.sleep(0)  # yield control
+            if user_input.strip().lower() == "a":
+                await ws.send(json.dumps({
+                    "type": "ACK",          # ← matches server msg_type == "ACK"
+                    "alert_id": alert_id,   # ← NEW: server logs which alert was ACK'd
+                }))
+                print("✅ Alert acknowledged\n")
+                speak("Alert acknowledged.")
+
     except asyncio.CancelledError:
         pass
     except Exception as e:
-        print("⚠️ Alert listener error:", e)
+        print(f"⚠️  Alert listener error: {e}")
 
+# ---------------- MAIN CLIENT ----------------
 async def civilian_client():
     stop_event = asyncio.Event()
 
     try:
         async with websockets.connect(
             SERVER_URL,
-            ssl=ssl_context,
+            ssl=SSL_CONTEXT,
             ping_interval=20,
-            ping_timeout=20
+            ping_timeout=20,
         ) as ws:
+            print(f"✅ Connected to {SERVER_URL}")
+            print(f"   Client ID : {CLIENT_ID}")
+            print(f"   Location  : {CIVILIAN_LAT}, {CIVILIAN_LON}")
+            print(f"   TTS       : {'enabled' if TTS_AVAILABLE else 'disabled'}\n")
 
-            # ----- HANDSHAKE -----
-            await ws.send(json.dumps({
-                "token": API_TOKEN,
-                "id": CLIENT_ID,
-                "role": ROLE
-            }))
-            print("✅ Civilian connected, waiting for alerts...")
-
-            # ----- TASKS -----
+            # Run location sender and alert listener concurrently
             location_task = asyncio.create_task(send_location(ws, stop_event))
-            alert_task = asyncio.create_task(listen_for_alerts(ws, stop_event))
+            alert_task    = asyncio.create_task(listen_for_alerts(ws, stop_event))
 
-            # Optional runtime limit
-            if MAX_RUNTIME:
-                await asyncio.sleep(MAX_RUNTIME)
-            else:
-                await asyncio.gather(location_task, alert_task)
+            await asyncio.gather(location_task, alert_task)
 
+    except ConnectionRefusedError:
+        print("❌ Could not connect — is the server running?")
     except Exception as e:
-        print("❌ Connection error:", e)
+        print(f"❌ Connection error: {e}")
     finally:
         stop_event.set()
-        print("🛑 Civilian client shutting down")
+        print("🛑 Civilian client shut down")
 
 # ---------------- ENTRY ----------------
 if __name__ == "__main__":
     try:
         asyncio.run(civilian_client())
     except KeyboardInterrupt:
-        print("👋 Interrupted by user")
+        print("\n👋 Interrupted by user")
