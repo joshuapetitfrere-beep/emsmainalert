@@ -19,7 +19,7 @@ except Exception:
 # ---------------- CONFIG ----------------
 # For local testing:  ws://YOUR_LOCAL_IP:8000/ws
 # For Railway:        wss://your-app.up.railway.app/ws
-SERVER_URL = "ws://localhost:8000/ws"
+SERVER_URL = "wss://emsmainalert-production.up.railway.app/ws"
 
 CLIENT_ID      = "civilian_1"
 CIVILIAN_LAT   = 27.995       # Replace with real or test coordinates
@@ -29,7 +29,7 @@ LOCATION_INTERVAL = 5         # seconds between GPS updates
 RECV_TIMEOUT      = 30        # seconds before timeout (keeps connection alive)
 
 # For local dev, skip SSL. Switch to ssl.create_default_context() on Railway.
-SSL_CONTEXT = None
+SSL_CONTEXT = ssl.create_default_context()
 
 # ---------------- LOCATION SENDER ----------------
 async def send_location(ws, stop_event: asyncio.Event):

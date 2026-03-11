@@ -6,8 +6,8 @@ import httpx
 # ---------------- CONFIG ----------------
 # For local testing:  http://localhost:8000  /  ws://localhost:8000/ws
 # For Railway:        https://your-app.up.railway.app
-SERVER_HTTP = "http://localhost:8000"
-SERVER_WS   = "ws://localhost:8000/ws"
+SERVER_HTTP = "https://emsmainalert-production.up.railway.app"
+SERVER_WS   = "wss://emsmainalert-production.up.railway.app/ws"
 
 EMS_UNIT_ID = "POLK-RESCUE-1"   # Change per unit/vehicle
 
