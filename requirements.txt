@@ -3,4 +3,5 @@ uvicorn[standard]
 httpx
 websockets
 pydantic
-
+sqlalchemy[asyncio]
+asyncpg
