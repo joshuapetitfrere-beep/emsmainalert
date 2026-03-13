@@ -79,21 +79,33 @@ export default function EMSScreen({ onExit }: Props) {
 
   // ── GPS ────────────────────────────────────────────────────────────────────
   async function startLocation() {
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== "granted") { setLocationLabel("GPS denied"); return; }
+  const { status } = await Location.requestForegroundPermissionsAsync();
+  if (status !== "granted") { setLocationLabel("GPS denied"); return; }
 
-    const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-    setLocation({ lat: loc.coords.latitude, lon: loc.coords.longitude });
-    setLocationLabel(`${loc.coords.latitude.toFixed(4)}, ${loc.coords.longitude.toFixed(4)}`);
+  // Keep trying until we get a fix
+  const tryGet = async () => {
+    try {
+      const loc = await Location.getCurrentPositionAsync({ 
+        accuracy: Location.Accuracy.Balanced,
+        timeInterval: 5000,
+      });
+      setLocation({ lat: loc.coords.latitude, lon: loc.coords.longitude });
+      setLocationLabel(`${loc.coords.latitude.toFixed(4)}, ${loc.coords.longitude.toFixed(4)}`);
+    } catch (e) {
+      console.log("GPS retry...");
+      setTimeout(tryGet, 3000);
+    }
+  };
+  tryGet();
 
-    locationInterval.current = setInterval(async () => {
-      try {
-        const l = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-        setLocation({ lat: l.coords.latitude, lon: l.coords.longitude });
-        setLocationLabel(`${l.coords.latitude.toFixed(4)}, ${l.coords.longitude.toFixed(4)}`);
-      } catch (e) {}
-    }, 10000);
-  }
+  locationInterval.current = setInterval(async () => {
+    try {
+      const l = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      setLocation({ lat: l.coords.latitude, lon: l.coords.longitude });
+      setLocationLabel(`${l.coords.latitude.toFixed(4)}, ${l.coords.longitude.toFixed(4)}`);
+    } catch (e) {}
+  }, 10000);
+}
 
   // ── Trigger Alert ──────────────────────────────────────────────────────────
   async function sendAlert(message: string) {

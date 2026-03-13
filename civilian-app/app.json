@@ -11,10 +11,14 @@
       "resizeMode": "contain",
       "backgroundColor": "#0a0f1e"
     },
-    "ios": {
-      "supportsTablet": false,
-      "bundleIdentifier": "com.polkcounty.clearpath"
-    },
+"ios": {
+  "supportsTablet": false,
+  "bundleIdentifier": "com.polkcounty.clearpath",
+  "infoPlist": {
+    "NSLocationWhenInUseUsageDescription": "ClearPath needs your location to alert you when EMS vehicles are nearby.",
+    "NSLocationAlwaysAndWhenInUseUsageDescription": "ClearPath needs your location to alert you when EMS vehicles are nearby."
+  }
+},    
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
