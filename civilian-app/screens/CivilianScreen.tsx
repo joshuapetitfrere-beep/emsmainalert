@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
   View, Text, StyleSheet, TouchableOpacity,
-  Vibration, Platform, SafeAreaView,
+  Vibration, SafeAreaView,
 } from "react-native";
 import * as Location from "expo-location";
+import ActiveAlertsScreen from "./ActiveAlertsScreen";
 
 const SERVER_WS = "wss://emsmainalert-production.up.railway.app/ws";
 
@@ -22,6 +23,7 @@ export default function CivilianScreen({ onExit }: Props) {
   const [wsStatus, setWsStatus]             = useState<"connecting" | "connected" | "disconnected">("connecting");
   const [locationStatus, setLocationStatus] = useState("Requesting...");
   const [alertCount, setAlertCount]         = useState(0);
+  const [showAlerts, setShowAlerts]         = useState(false);
 
   const wsRef            = useRef<WebSocket | null>(null);
   const locationInterval = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -41,16 +43,13 @@ export default function CivilianScreen({ onExit }: Props) {
     setWsStatus("connecting");
     const ws = new WebSocket(SERVER_WS);
     wsRef.current = ws;
-
     ws.onopen = () => setWsStatus("connected");
-
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
         if (data.type === "ems_alert") triggerAlert(data as EMSAlert);
       } catch (e) {}
     };
-
     ws.onclose = () => {
       setWsStatus("disconnected");
       reconnectTimeout.current = setTimeout(connectWebSocket, 5000);
@@ -85,7 +84,8 @@ export default function CivilianScreen({ onExit }: Props) {
     setActiveAlert(null);
   }
 
-  // ── Alert overlay ──────────────────────────────────────────────────────────
+  if (showAlerts) return <ActiveAlertsScreen onBack={() => setShowAlerts(false)} />;
+
   if (activeAlert) {
     return (
       <View style={styles.alertOverlay}>
@@ -103,7 +103,6 @@ export default function CivilianScreen({ onExit }: Props) {
     );
   }
 
-  // ── Standby ────────────────────────────────────────────────────────────────
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
@@ -132,6 +131,10 @@ export default function CivilianScreen({ onExit }: Props) {
             🛡️  You will be alerted when an EMS vehicle is within 2 miles. Keep this app open while driving.
           </Text>
         </View>
+
+        <TouchableOpacity style={styles.alertsBtn} onPress={() => setShowAlerts(true)}>
+          <Text style={styles.alertsBtnText}>🗺  View Active Alerts</Text>
+        </TouchableOpacity>
       </View>
     </SafeAreaView>
   );
@@ -159,8 +162,10 @@ const styles = StyleSheet.create({
   row:              { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   rowLabel:         { fontSize: 15, color: "#94a3b8" },
   rowValue:         { fontSize: 14, fontWeight: "700" },
-  infoBox:          { backgroundColor: "#1e293b", borderRadius: 12, padding: 16, borderLeftWidth: 3, borderLeftColor: "#3b82f6" },
+  infoBox:          { backgroundColor: "#1e293b", borderRadius: 12, padding: 16, borderLeftWidth: 3, borderLeftColor: "#3b82f6", marginBottom: 16 },
   infoText:         { fontSize: 14, color: "#94a3b8", lineHeight: 22 },
+  alertsBtn:        { backgroundColor: "#1a0a0a", borderRadius: 14, padding: 16, alignItems: "center", borderWidth: 1, borderColor: "#7f1d1d" },
+  alertsBtnText:    { color: "#ef4444", fontWeight: "700", fontSize: 15 },
   alertOverlay:     { flex: 1, backgroundColor: "#dc2626", alignItems: "center", justifyContent: "center", padding: 32 },
   alertIcon:        { fontSize: 80, marginBottom: 20 },
   alertTitle:       { fontSize: 34, fontWeight: "900", color: "#fff", textAlign: "center", letterSpacing: 1, lineHeight: 40, marginBottom: 24 },
@@ -170,3 +175,4 @@ const styles = StyleSheet.create({
   ackButton:        { backgroundColor: "#fff", borderRadius: 16, paddingVertical: 20, paddingHorizontal: 40, width: "100%", alignItems: "center" },
   ackButtonText:    { color: "#dc2626", fontSize: 18, fontWeight: "900" },
 });
+

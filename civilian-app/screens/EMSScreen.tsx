@@ -79,33 +79,21 @@ export default function EMSScreen({ onExit }: Props) {
 
   // ── GPS ────────────────────────────────────────────────────────────────────
   async function startLocation() {
-  const { status } = await Location.requestForegroundPermissionsAsync();
-  if (status !== "granted") { setLocationLabel("GPS denied"); return; }
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== "granted") { setLocationLabel("GPS denied"); return; }
 
-  // Keep trying until we get a fix
-  const tryGet = async () => {
-    try {
-      const loc = await Location.getCurrentPositionAsync({ 
-        accuracy: Location.Accuracy.Balanced,
-        timeInterval: 5000,
-      });
-      setLocation({ lat: loc.coords.latitude, lon: loc.coords.longitude });
-      setLocationLabel(`${loc.coords.latitude.toFixed(4)}, ${loc.coords.longitude.toFixed(4)}`);
-    } catch (e) {
-      console.log("GPS retry...");
-      setTimeout(tryGet, 3000);
-    }
-  };
-  tryGet();
+    const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+    setLocation({ lat: loc.coords.latitude, lon: loc.coords.longitude });
+    setLocationLabel(`${loc.coords.latitude.toFixed(4)}, ${loc.coords.longitude.toFixed(4)}`);
 
-  locationInterval.current = setInterval(async () => {
-    try {
-      const l = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      setLocation({ lat: l.coords.latitude, lon: l.coords.longitude });
-      setLocationLabel(`${l.coords.latitude.toFixed(4)}, ${l.coords.longitude.toFixed(4)}`);
-    } catch (e) {}
-  }, 10000);
-}
+    locationInterval.current = setInterval(async () => {
+      try {
+        const l = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+        setLocation({ lat: l.coords.latitude, lon: l.coords.longitude });
+        setLocationLabel(`${l.coords.latitude.toFixed(4)}, ${l.coords.longitude.toFixed(4)}`);
+      } catch (e) {}
+    }, 10000);
+  }
 
   // ── Trigger Alert ──────────────────────────────────────────────────────────
   async function sendAlert(message: string) {
@@ -122,7 +110,7 @@ export default function EMSScreen({ onExit }: Props) {
     setAckCount(0);
 
     try {
-      const url = `${SERVER_HTTP}/trigger-alert?lat=${location.lat}&lon=${location.lon}&alert_message=${encodeURIComponent(message)}&radius=2.0&ems_unit_id=${EMS_UNIT_ID}&api_key=${EMS_API_KEY}`;
+      const url = `${SERVER_HTTP}/trigger-alert?lat=${location.lat}&lon=${location.lon}&alert_message=${encodeURIComponent(message)}&radius=2.0&ems_unit_id=${EMS_UNIT_ID}`;
       const resp = await fetch(url, { method: "POST" });
       const data = await resp.json();
 
@@ -291,3 +279,4 @@ const styles = StyleSheet.create({
   logTime:         { fontSize: 12, color: "#6b7280", marginBottom: 2 },
   logDelivered:    { fontSize: 11, color: "#22c55e", fontWeight: "600" },
 });
+

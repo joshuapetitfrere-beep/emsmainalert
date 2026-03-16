@@ -11,20 +11,31 @@
       "resizeMode": "contain",
       "backgroundColor": "#0a0f1e"
     },
-"ios": {
-  "supportsTablet": false,
-  "bundleIdentifier": "com.polkcounty.clearpath",
-  "infoPlist": {
-    "NSLocationWhenInUseUsageDescription": "ClearPath needs your location to alert you when EMS vehicles are nearby.",
-    "NSLocationAlwaysAndWhenInUseUsageDescription": "ClearPath needs your location to alert you when EMS vehicles are nearby."
-  }
-},    
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.polkcounty.clearpath",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "ClearPath needs your location to alert you when EMS vehicles are nearby.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "ClearPath needs your location to alert you when EMS vehicles are nearby.",
+        "NSLocationAlwaysUsageDescription": "ClearPath needs your location to alert you when EMS vehicles are nearby."
+      }
+    },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0a0f1e"
       },
-      "package": "com.polkcounty.clearpath"
-    }
+      "package": "com.polkcounty.clearpath",
+      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"]
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "ClearPath needs your location to alert you when EMS vehicles are nearby.",
+          "locationWhenInUsePermission": "ClearPath needs your location to alert you when EMS vehicles are nearby."
+        }
+      ]
+    ]
   }
 }
