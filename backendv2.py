@@ -59,9 +59,23 @@ async def lifespan(app: FastAPI):
     if engine:
         await engine.dispose()
 
-app = FastAPI(title="EMS Alert Server", version="4.0.0", lifespan=lifespan)
+app = FastAPI(title="EMS Alert Server", version="4.1.0", lifespan=lifespan)
 EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 
+# ── Cooldown ──────────────────────────────────────────────────────────────────
+cooldown_tracker: dict[str, datetime] = {}
+COOLDOWN_SECONDS = 30
+
+def check_cooldown(unit_id: str) -> bool:
+    last = cooldown_tracker.get(unit_id)
+    if last is None:
+        return True
+    return (datetime.utcnow() - last).total_seconds() >= COOLDOWN_SECONDS
+
+def update_cooldown(unit_id: str):
+    cooldown_tracker[unit_id] = datetime.utcnow()
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
 def load_api_keys() -> dict:
     raw = os.environ.get("EMS_API_KEYS", "")
     keys = {}
@@ -78,6 +92,7 @@ def validate_api_key(api_key: str) -> str:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
     return keys[api_key]
 
+# ── Haversine ─────────────────────────────────────────────────────────────────
 def distance_miles(lat1, lon1, lat2, lon2):
     lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
     dlon = lon2 - lon1
@@ -89,6 +104,7 @@ def distance_miles(lat1, lon1, lat2, lon2):
 def make_alert_id(unit_id: str) -> str:
     return f"alert_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{unit_id}"
 
+# ── Client ────────────────────────────────────────────────────────────────────
 class Client:
     def __init__(self, websocket: WebSocket):
         self.websocket = websocket
@@ -96,7 +112,9 @@ class Client:
         self.lon: Optional[float] = None
         self.ack: bool = False
         self.push_token: Optional[str] = None
+        self.is_ems: bool = False
 
+# ── Connection Manager ────────────────────────────────────────────────────────
 class ConnectionManager:
     def __init__(self):
         self.active_clients: List[Client] = []
@@ -121,6 +139,8 @@ class ConnectionManager:
 
         for client in self.active_clients.copy():
             try:
+                if client.is_ems:
+                    continue  # skip EMS units — they trigger alerts, don't receive them
                 if client.lat is not None and client.lon is not None:
                     if distance_miles(lat, lon, client.lat, client.lon) > radius_miles:
                         continue
@@ -172,6 +192,7 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+# ── WebSocket ─────────────────────────────────────────────────────────────────
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     client = await manager.connect(websocket)
@@ -206,6 +227,10 @@ async def websocket_endpoint(websocket: WebSocket):
                             await session.commit()
                     print(f"[TOKEN] ...{token[-6:]}")
 
+            elif msg_type == "ems_unit":
+                client.is_ems = True
+                print(f"[EMS] Unit registered: {data.get('unit_id')}")
+
             elif msg_type == "ACK":
                 client.ack = True
                 alert_id     = data.get("alert_id", "unknown")
@@ -222,6 +247,7 @@ async def websocket_endpoint(websocket: WebSocket):
         print(f"[WS ERROR] {e}")
         manager.disconnect(client)
 
+# ── HTTP Endpoints ────────────────────────────────────────────────────────────
 @app.post("/trigger-alert")
 async def trigger_alert(
     lat: float         = Query(...),
@@ -232,6 +258,10 @@ async def trigger_alert(
     api_key: str       = Query(...),
 ):
     validate_api_key(api_key)
+    if not check_cooldown(ems_unit_id):
+        seconds_left = int(COOLDOWN_SECONDS - (datetime.utcnow() - cooldown_tracker[ems_unit_id]).total_seconds())
+        raise HTTPException(status_code=429, detail=f"Cooldown active. Wait {seconds_left} seconds.")
+    update_cooldown(ems_unit_id)
     entry = await manager.broadcast_alert(message=alert_message, lat=lat, lon=lon, radius_miles=radius, ems_unit_id=ems_unit_id)
     return {"status": "Alert sent", "alert_id": entry["id"], "message": alert_message, "radius_miles": radius, "ws_delivered": entry["ws_sent"], "push_delivered": entry["push_sent"]}
 
