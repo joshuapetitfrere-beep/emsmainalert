@@ -257,7 +257,7 @@ async def get_alerts():
     if async_session:
         async with async_session() as session:
             alerts = (await session.execute(select(Alert).order_by(Alert.sent_at.desc()).limit(20))).scalars().all()
-            return {"alerts": [{"id": a.id, "ems_unit": a.ems_unit, "message": a.message, "ws_sent": a.ws_sent, "sent_at": str(a.sent_at)} for a in alerts]}
+            return {"alerts": [{"id": a.id, "ems_unit": a.ems_unit, "message": a.message, "ws_sent": a.ws_sent, "sent_at": str(a.sent_at), "lat": a.lat, "lon": a.lon, "radius_miles": a.radius_miles} for a in alerts]}
     return {"alerts": []}
 
 @app.get("/devices")
