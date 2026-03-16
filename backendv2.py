@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException
 from typing import List, Optional
 from math import radians, cos, sin, asin, sqrt
 from contextlib import asynccontextmanager
@@ -8,15 +8,10 @@ import asyncpg
 import os
 from datetime import datetime
 
-# ─── Database ────────────────────────────────────────────────────────────────
 DATABASE_URL = os.environ.get("DATABASE_URL")
 db_pool = None
 
-async def get_db():
-    return db_pool
-
 async def init_db(pool):
-    """Create tables if they don't exist."""
     async with pool.acquire() as conn:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS devices (
@@ -50,7 +45,6 @@ async def init_db(pool):
         """)
     print("[DB] Tables ready")
 
-# ─── Lifespan ────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global db_pool
@@ -64,10 +58,43 @@ async def lifespan(app: FastAPI):
     if db_pool:
         await db_pool.close()
 
-app = FastAPI(title="EMS Alert Server", version="3.0.0", lifespan=lifespan)
+app = FastAPI(title="EMS Alert Server", version="4.2.0", lifespan=lifespan)
 EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 
-# ─── Haversine ────────────────────────────────────────────────────────────────
+# ── Cooldown ──────────────────────────────────────────────────────────────────
+cooldown_tracker: dict = {}
+COOLDOWN_SECONDS = 30
+
+def check_cooldown(unit_id: str) -> bool:
+    last = cooldown_tracker.get(unit_id)
+    if last is None:
+        return True
+    return (datetime.utcnow() - last).total_seconds() >= COOLDOWN_SECONDS
+
+def update_cooldown(unit_id: str):
+    cooldown_tracker[unit_id] = datetime.utcnow()
+
+# ── Active alerts tracker ─────────────────────────────────────────────────────
+active_alerts: dict = {}
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
+def load_api_keys() -> dict:
+    raw = os.environ.get("EMS_API_KEYS", "")
+    keys = {}
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if ":" in entry:
+            unit_id, key = entry.split(":", 1)
+            keys[key.strip()] = unit_id.strip()
+    return keys
+
+def validate_api_key(api_key: str) -> str:
+    keys = load_api_keys()
+    if api_key not in keys:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    return keys[api_key]
+
+# ── Haversine ─────────────────────────────────────────────────────────────────
 def distance_miles(lat1, lon1, lat2, lon2):
     lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
     dlon = lon2 - lon1
@@ -76,11 +103,17 @@ def distance_miles(lat1, lon1, lat2, lon2):
     c = 2 * asin(sqrt(a))
     return 3956 * c
 
-# ─── Alert ID ─────────────────────────────────────────────────────────────────
 def make_alert_id(unit_id: str) -> str:
     return f"alert_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{unit_id}"
 
-# ─── Client ───────────────────────────────────────────────────────────────────
+def parse_ts_from_id(alert_id: str) -> Optional[str]:
+    try:
+        ts = alert_id.split("_")[1]
+        return f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}T{ts[8:10]}:{ts[10:12]}:{ts[12:14]}"
+    except:
+        return None
+
+# ── Client ────────────────────────────────────────────────────────────────────
 class Client:
     def __init__(self, websocket: WebSocket):
         self.websocket = websocket
@@ -88,8 +121,10 @@ class Client:
         self.lon: Optional[float] = None
         self.ack: bool = False
         self.push_token: Optional[str] = None
+        self.is_ems: bool = False
+        self.unit_id: Optional[str] = None
 
-# ─── Connection Manager ───────────────────────────────────────────────────────
+# ── Connection Manager ────────────────────────────────────────────────────────
 class ConnectionManager:
     def __init__(self):
         self.active_clients: List[Client] = []
@@ -98,42 +133,46 @@ class ConnectionManager:
         await websocket.accept()
         client = Client(websocket)
         self.active_clients.append(client)
-        print(f"[CONNECT] Total connected: {len(self.active_clients)}")
+        print(f"[CONNECT] Total: {len(self.active_clients)}")
         return client
 
     def disconnect(self, client: Client):
         if client in self.active_clients:
             self.active_clients.remove(client)
-        print(f"[DISCONNECT] Total connected: {len(self.active_clients)}")
+        if client.unit_id and client.unit_id in active_alerts:
+            del active_alerts[client.unit_id]
+        print(f"[DISCONNECT] Total: {len(self.active_clients)}")
 
-    async def broadcast_alert(
-        self,
-        message: str,
-        lat: float,
-        lon: float,
-        radius_miles: float = 2.0,
-        ems_unit_id: str = "EMS",
-    ):
-        alert_id = make_alert_id(ems_unit_id)
-        alert_payload = {
-            "type": "ems_alert",
-            "alert_id": alert_id,
-            "message": message,
-            "ems_unit": ems_unit_id,
-            "lat": lat,
-            "lon": lon,
-        }
-        alert_json = json.dumps(alert_payload)
-        ws_sent = 0
-        push_tokens: list[str] = []
-
-        # ── 1. WebSocket to connected clients ────────────────────────────────
+    async def broadcast_ems_position(self, unit_id, lat, lon, alert_id, radius_miles):
+        payload = json.dumps({"type": "ems_position", "unit_id": unit_id, "alert_id": alert_id, "lat": lat, "lon": lon})
         for client in self.active_clients.copy():
+            if client.is_ems:
+                continue
             try:
                 if client.lat is not None and client.lon is not None:
                     if distance_miles(lat, lon, client.lat, client.lon) > radius_miles:
                         continue
-                await client.websocket.send_text(alert_json)
+                await client.websocket.send_text(payload)
+            except Exception as e:
+                print(f"[POS ERROR] {e}")
+
+    async def broadcast_alert(self, message, lat, lon, radius_miles=2.0, ems_unit_id="EMS"):
+        alert_id = make_alert_id(ems_unit_id)
+        now = datetime.utcnow()
+        payload = json.dumps({"type": "ems_alert", "alert_id": alert_id, "message": message, "ems_unit": ems_unit_id, "lat": lat, "lon": lon})
+        ws_sent = 0
+        push_tokens = []
+
+        active_alerts[ems_unit_id] = {"alert_id": alert_id, "lat": lat, "lon": lon, "radius_miles": radius_miles}
+
+        for client in self.active_clients.copy():
+            try:
+                if client.is_ems:
+                    continue
+                if client.lat is not None and client.lon is not None:
+                    if distance_miles(lat, lon, client.lat, client.lon) > radius_miles:
+                        continue
+                await client.websocket.send_text(payload)
                 client.ack = False
                 ws_sent += 1
                 if client.push_token:
@@ -142,15 +181,13 @@ class ConnectionManager:
                 print(f"[WS ERROR] {e}")
                 self.active_clients.remove(client)
 
-        # ── 2. Push to offline tokens from database ───────────────────────────
         if db_pool:
             async with db_pool.acquire() as conn:
-                # Get all tokens not currently connected via WebSocket
                 active_tokens = {c.push_token for c in self.active_clients if c.push_token}
                 rows = await conn.fetch("SELECT token, lat, lon FROM devices")
                 for row in rows:
                     if row["token"] in active_tokens:
-                        continue  # already handled via WebSocket
+                        continue
                     if row["lat"] is not None and row["lon"] is not None:
                         if distance_miles(lat, lon, row["lat"], row["lon"]) > radius_miles:
                             continue
@@ -158,51 +195,27 @@ class ConnectionManager:
 
         push_sent = await self._send_expo_push(push_tokens, message, ems_unit_id, alert_id, lat, lon)
 
-        # ── 3. Persist alert to database ─────────────────────────────────────
         if db_pool:
             async with db_pool.acquire() as conn:
                 await conn.execute(
-                    """INSERT INTO alerts (id, ems_unit, message, lat, lon, radius_miles, ws_sent, push_sent)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
-                    alert_id, ems_unit_id, message, lat, lon, radius_miles, ws_sent, push_sent
+                    """INSERT INTO alerts (id, ems_unit, message, lat, lon, radius_miles, sent_at, ws_sent, push_sent)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)""",
+                    alert_id, ems_unit_id, message, lat, lon, radius_miles, now, ws_sent, push_sent
                 )
 
         print(f"[ALERT] {alert_id} | WS: {ws_sent} | Push: {push_sent}")
-        return {
-            "id": alert_id,
-            "ems_unit": ems_unit_id,
-            "message": message,
-            "ws_sent": ws_sent,
-            "push_sent": push_sent,
-        }
+        return {"id": alert_id, "ems_unit": ems_unit_id, "message": message, "ws_sent": ws_sent, "push_sent": push_sent, "sent_at": now.isoformat()}
 
     async def _send_expo_push(self, tokens, message, unit_id, alert_id, lat, lon):
         valid = [t for t in tokens if t.startswith("ExponentPushToken")]
         if not valid:
             return 0
-        messages = [
-            {
-                "to": token,
-                "sound": "default",
-                "title": "🚨 EMS VEHICLE APPROACHING",
-                "body": message,
-                "data": {"alert_id": alert_id, "ems_unit": unit_id, "lat": lat, "lon": lon},
-                "priority": "high",
-                "channelId": "ems-alerts",
-                "ttl": 60,
-            }
-            for token in valid
-        ]
+        messages = [{"to": t, "sound": "default", "title": "🚨 EMS VEHICLE APPROACHING", "body": message, "data": {"alert_id": alert_id, "ems_unit": unit_id, "lat": lat, "lon": lon}, "priority": "high", "ttl": 60} for t in valid]
         sent = 0
         async with httpx.AsyncClient() as client:
             for i in range(0, len(messages), 100):
                 try:
-                    resp = await client.post(
-                        EXPO_PUSH_URL,
-                        json=messages[i:i+100],
-                        headers={"Content-Type": "application/json"},
-                        timeout=10.0,
-                    )
+                    resp = await client.post(EXPO_PUSH_URL, json=messages[i:i+100], headers={"Content-Type": "application/json"}, timeout=10.0)
                     sent += sum(1 for r in resp.json().get("data", []) if r.get("status") == "ok")
                 except Exception as e:
                     print(f"[PUSH ERROR] {e}")
@@ -210,7 +223,7 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# ─── WebSocket ────────────────────────────────────────────────────────────────
+# ── WebSocket ─────────────────────────────────────────────────────────────────
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     client = await manager.connect(websocket)
@@ -222,16 +235,44 @@ async def websocket_endpoint(websocket: WebSocket):
             if msg_type == "update":
                 client.lat = data.get("lat")
                 client.lon = data.get("lon")
-                # Persist location update
                 if db_pool and client.push_token:
                     async with db_pool.acquire() as conn:
                         await conn.execute(
-                            """INSERT INTO devices (token, lat, lon, last_seen)
-                               VALUES ($1, $2, $3, NOW())
-                               ON CONFLICT (token) DO UPDATE
-                               SET lat=$2, lon=$3, last_seen=NOW()""",
+                            """INSERT INTO devices (token, lat, lon, last_seen) VALUES ($1, $2, $3, NOW())
+                               ON CONFLICT (token) DO UPDATE SET lat=$2, lon=$3, last_seen=NOW()""",
                             client.push_token, client.lat, client.lon
                         )
+
+            elif msg_type == "ems_unit":
+                client.is_ems = True
+                client.unit_id = data.get("unit_id")
+                print(f"[EMS] Unit registered: {client.unit_id}")
+
+            elif msg_type == "ems_position":
+                unit_id  = data.get("unit_id")
+                lat      = data.get("lat")
+                lon      = data.get("lon")
+                alert_id = data.get("alert_id")
+                if unit_id and lat and lon and alert_id:
+                    if unit_id in active_alerts:
+                        active_alerts[unit_id]["lat"] = lat
+                        active_alerts[unit_id]["lon"] = lon
+                        radius = active_alerts[unit_id]["radius_miles"]
+                    else:
+                        radius = 2.0
+                    await manager.broadcast_ems_position(unit_id, lat, lon, alert_id, radius)
+
+            elif msg_type == "ems_clear":
+                unit_id = data.get("unit_id")
+                if unit_id and unit_id in active_alerts:
+                    del active_alerts[unit_id]
+                    payload = json.dumps({"type": "ems_clear", "unit_id": unit_id})
+                    for c in manager.active_clients:
+                        if not c.is_ems:
+                            try:
+                                await c.websocket.send_text(payload)
+                            except:
+                                pass
 
             elif msg_type == "register_token":
                 token = data.get("token")
@@ -240,13 +281,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     if db_pool:
                         async with db_pool.acquire() as conn:
                             await conn.execute(
-                                """INSERT INTO devices (token, lat, lon)
-                                   VALUES ($1, $2, $3)
-                                   ON CONFLICT (token) DO UPDATE
-                                   SET last_seen=NOW()""",
+                                """INSERT INTO devices (token, lat, lon) VALUES ($1, $2, $3)
+                                   ON CONFLICT (token) DO UPDATE SET last_seen=NOW()""",
                                 token, client.lat, client.lon
                             )
-                    print(f"[TOKEN] Registered: ...{token[-6:]}")
+                    print(f"[TOKEN] ...{token[-6:]}")
 
             elif msg_type == "ACK":
                 client.ack = True
@@ -266,44 +305,43 @@ async def websocket_endpoint(websocket: WebSocket):
         print(f"[WS ERROR] {e}")
         manager.disconnect(client)
 
-# ─── HTTP Endpoints ───────────────────────────────────────────────────────────
+# ── HTTP Endpoints ────────────────────────────────────────────────────────────
 @app.post("/trigger-alert")
 async def trigger_alert(
-    lat: float = Query(...),
-    lon: float = Query(...),
+    lat: float         = Query(...),
+    lon: float         = Query(...),
     alert_message: str = Query("Emergency Vehicle Approaching"),
-    radius: float = Query(2.0),
-    ems_unit_id: str = Query("EMS-1"),
+    radius: float      = Query(2.0),
+    ems_unit_id: str   = Query("EMS-1"),
+    api_key: str       = Query(...),
 ):
-    entry = await manager.broadcast_alert(
-        message=alert_message, lat=lat, lon=lon,
-        radius_miles=radius, ems_unit_id=ems_unit_id
-    )
-    return {
-        "status": "Alert sent",
-        "alert_id": entry["id"],
-        "message": alert_message,
-        "radius_miles": radius,
-        "ws_delivered": entry["ws_sent"],
-        "push_delivered": entry["push_sent"],
-    }
+    validate_api_key(api_key)
+    if not check_cooldown(ems_unit_id):
+        seconds_left = int(COOLDOWN_SECONDS - (datetime.utcnow() - cooldown_tracker[ems_unit_id]).total_seconds())
+        raise HTTPException(status_code=429, detail=f"Cooldown active. Wait {seconds_left} seconds.")
+    update_cooldown(ems_unit_id)
+    entry = await manager.broadcast_alert(message=alert_message, lat=lat, lon=lon, radius_miles=radius, ems_unit_id=ems_unit_id)
+    return {"status": "Alert sent", "alert_id": entry["id"], "message": alert_message, "radius_miles": radius, "ws_delivered": entry["ws_sent"], "push_delivered": entry["push_sent"]}
 
 @app.get("/status")
 async def status():
     device_count = 0
-    alert_count = 0
-    last_alert = None
+    alert_count  = 0
+    last_alert   = None
     if db_pool:
         async with db_pool.acquire() as conn:
             device_count = await conn.fetchval("SELECT COUNT(*) FROM devices")
-            alert_count = await conn.fetchval("SELECT COUNT(*) FROM alerts")
-            row = await conn.fetchrow("SELECT * FROM alerts ORDER BY sent_at DESC LIMIT 1")
+            alert_count  = await conn.fetchval("SELECT COUNT(*) FROM alerts")
+            row = await conn.fetchrow("SELECT * FROM alerts ORDER BY sent_at DESC NULLS LAST LIMIT 1")
             if row:
-                last_alert = dict(row)
+                d = dict(row)
+                d["sent_at"] = str(d["sent_at"]) if d["sent_at"] else parse_ts_from_id(d["id"])
+                last_alert = d
     return {
         "connected_clients": len(manager.active_clients),
         "registered_devices": device_count,
         "total_alerts_sent": alert_count,
+        "active_responses": len(active_alerts),
         "last_alert": last_alert,
     }
 
@@ -311,9 +349,21 @@ async def status():
 async def get_alerts():
     if db_pool:
         async with db_pool.acquire() as conn:
-            rows = await conn.fetch("SELECT * FROM alerts ORDER BY sent_at DESC LIMIT 20")
-            return {"alerts": [dict(r) for r in rows]}
+            rows = await conn.fetch("SELECT * FROM alerts ORDER BY sent_at DESC NULLS LAST LIMIT 20")
+            alerts = []
+            for r in rows:
+                d = dict(r)
+                if d.get("sent_at") is None:
+                    d["sent_at"] = parse_ts_from_id(d["id"])
+                else:
+                    d["sent_at"] = str(d["sent_at"])
+                alerts.append(d)
+            return {"alerts": alerts}
     return {"alerts": []}
+
+@app.get("/active")
+async def get_active():
+    return {"active_responses": active_alerts}
 
 @app.get("/devices")
 async def get_devices():
