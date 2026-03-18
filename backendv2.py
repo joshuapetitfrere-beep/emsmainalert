@@ -96,7 +96,7 @@ async def lifespan(app: FastAPI):
         await db_pool.close()
 
 
-app = FastAPI(title="EMS Alert Server", version="4.6.0", lifespan=lifespan)
+app = FastAPI(title="EMS Alert Server", version="4.7.0", lifespan=lifespan)
 EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 
 # ── Cooldown ──────────────────────────────────────────────────────────────────
@@ -116,6 +116,14 @@ def update_cooldown(unit_id: str):
 
 
 # ── Active alerts & dashboard clients ────────────────────────────────────────
+# active_alerts structure per unit:
+# {
+#   alert_id, lat, lon, prev_lat, prev_lon, radius_miles,
+#   destination_hospital, num_patients, alert_type, activated_at,
+#   trauma,
+#   paused: bool,
+#   pause_reason: str | None,
+# }
 active_alerts: dict = {}
 dashboard_clients: List[WebSocket] = []
 
@@ -148,8 +156,9 @@ def build_dashboard_payload() -> dict:
             "activated_at": alert.get("activated_at"),
             "lat": alert.get("lat"),
             "lon": alert.get("lon"),
-            # Trauma fields — None if no trauma activated
             "trauma": alert.get("trauma", None),
+            "paused": alert.get("paused", False),
+            "pause_reason": alert.get("pause_reason", None),
         })
     return {
         "type": "dashboard_update",
@@ -251,16 +260,20 @@ class ConnectionManager:
             except Exception as e:
                 print(f"[POS ERROR] {e}")
 
-    async def broadcast_clear(self, unit_id: str, reason: str = "manual"):
-        if unit_id in active_alerts:
-            del active_alerts[unit_id]
-        payload = json.dumps({"type": "ems_clear", "unit_id": unit_id, "reason": reason})
+    async def broadcast_to_civilians(self, payload: str):
+        """Send an arbitrary payload to all connected civilian clients."""
         for c in self.active_clients.copy():
             if not c.is_ems:
                 try:
                     await c.websocket.send_text(payload)
                 except Exception as e:
-                    print(f"[CLEAR ERROR] {e}")
+                    print(f"[BROADCAST ERROR] {e}")
+
+    async def broadcast_clear(self, unit_id: str, reason: str = "manual"):
+        if unit_id in active_alerts:
+            del active_alerts[unit_id]
+        payload = json.dumps({"type": "ems_clear", "unit_id": unit_id, "reason": reason})
+        await self.broadcast_to_civilians(payload)
         print(f"[CLEAR] Unit {unit_id} — reason: {reason}")
         await push_dashboard_update()
 
@@ -291,6 +304,8 @@ class ConnectionManager:
             "alert_type": alert_type,
             "activated_at": now.isoformat(),
             "trauma": None,
+            "paused": False,
+            "pause_reason": None,
         }
 
         for client in self.active_clients.copy():
@@ -436,27 +451,61 @@ async def websocket_endpoint(websocket: WebSocket):
                         active_alerts[unit_id]["lat"] = lat
                         active_alerts[unit_id]["lon"] = lon
                         radius = active_alerts[unit_id]["radius_miles"]
+                        is_paused = active_alerts[unit_id].get("paused", False)
                     else:
                         prev_lat, prev_lon = None, None
                         radius = 2.0
+                        is_paused = False
 
+                    # Geofence check runs regardless of pause state
                     hospital = check_hospital_geofence(lat, lon)
                     if hospital and unit_id in active_alerts:
                         print(f"[GEOFENCE] {unit_id} entered {hospital} — auto-clearing")
                         await manager.broadcast_clear(unit_id, reason=f"arrived:{hospital}")
-                    else:
+                    elif not is_paused:
+                        # Only broadcast position if alert is NOT paused
                         await manager.broadcast_ems_position(unit_id, lat, lon, alert_id, radius, prev_lat, prev_lon)
                         await push_dashboard_update()
 
+            elif msg_type == "ems_pause":
+                # ── Pause alert broadcasts ────────────────────────────────────
+                unit_id = data.get("unit_id")
+                reason = data.get("reason", "Paused")
+                if unit_id and unit_id in active_alerts:
+                    active_alerts[unit_id]["paused"] = True
+                    active_alerts[unit_id]["pause_reason"] = reason
+                    # Tell civilians to show standby state
+                    payload = json.dumps({
+                        "type": "ems_pause",
+                        "unit_id": unit_id,
+                        "reason": reason,
+                    })
+                    await manager.broadcast_to_civilians(payload)
+                    await push_dashboard_update()
+                    print(f"[PAUSE] {unit_id} — reason: {reason}")
+
+            elif msg_type == "ems_resume":
+                # ── Resume alert broadcasts ───────────────────────────────────
+                unit_id = data.get("unit_id")
+                if unit_id and unit_id in active_alerts:
+                    active_alerts[unit_id]["paused"] = False
+                    active_alerts[unit_id]["pause_reason"] = None
+                    # Tell civilians to restore active alert state
+                    payload = json.dumps({
+                        "type": "ems_resume",
+                        "unit_id": unit_id,
+                    })
+                    await manager.broadcast_to_civilians(payload)
+                    await push_dashboard_update()
+                    print(f"[RESUME] {unit_id}")
+
             elif msg_type == "ems_trauma":
-                # ── Trauma activation ─────────────────────────────────────────
                 unit_id = data.get("unit_id")
                 if unit_id and unit_id in active_alerts:
                     lat = active_alerts[unit_id].get("lat")
                     lon = active_alerts[unit_id].get("lon")
                     hospital = active_alerts[unit_id].get("destination_hospital")
                     eta = calc_eta_minutes(lat, lon, hospital) if lat and lon and hospital else None
-
                     trauma = {
                         "mechanism": data.get("mechanism", "Unknown"),
                         "num_patients": data.get("num_patients", active_alerts[unit_id].get("num_patients", 1)),
@@ -470,10 +519,8 @@ async def websocket_endpoint(websocket: WebSocket):
                         "destination_hospital": hospital,
                     }
                     active_alerts[unit_id]["trauma"] = trauma
-                    print(f"[TRAUMA] {unit_id} → {hospital} | Mech: {trauma['mechanism']} | ETA: {eta}min")
+                    print(f"[TRAUMA] {unit_id} → {hospital} | ETA: {eta}min")
                     await push_dashboard_update()
-
-                    # Ack back to EMS unit
                     try:
                         await client.websocket.send_text(json.dumps({
                             "type": "trauma_ack",

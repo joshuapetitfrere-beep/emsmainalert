@@ -28,6 +28,12 @@ const MECHANISMS = [
   "Pedestrian vs Vehicle", "Motorcycle Crash", "Other",
 ];
 
+const PAUSE_REASONS = [
+  { label: "🛑  Stopped on Scene",        value: "Stopped on scene"        },
+  { label: "🚧  Staging / Scene Safety",  value: "Staging / scene safety"  },
+  { label: "✅  Traffic Already Cleared", value: "Traffic already cleared" },
+];
+
 const PRESETS = [
   { label: "🔥 Fire",      message: "Fire Rescue responding — emergency vehicle approaching",  type: "Fire"    },
   { label: "🚑 Medical",   message: "Medical Emergency — ambulance approaching, please yield", type: "Medical" },
@@ -65,22 +71,27 @@ export default function EMSScreen({ onExit }: Props) {
   const [showHospitalModal, setShowHospitalModal] = useState(false);
   const [showTypeModal, setShowTypeModal]         = useState(false);
 
-  // Trauma modal state
-  const [showTraumaModal, setShowTraumaModal]     = useState(false);
-  const [traumaActivated, setTraumaActivated]     = useState(false);
-  const [traumaETA, setTraumaETA]                 = useState<number | null>(null);
-  const [traumaMechanism, setTraumaMechanism]     = useState(MECHANISMS[0]);
-  const [traumaAge, setTraumaAge]                 = useState("");
-  const [traumaSex, setTraumaSex]                 = useState<"M" | "F" | "U">("U");
-  const [traumaVitals, setTraumaVitals]           = useState("");
-  const [traumaGCS, setTraumaGCS]                 = useState("");
-  const [showMechModal, setShowMechModal]         = useState(false);
-  const [traumaSending, setTraumaSending]         = useState(false);
+  // Trauma
+  const [showTraumaModal, setShowTraumaModal] = useState(false);
+  const [traumaActivated, setTraumaActivated] = useState(false);
+  const [traumaETA, setTraumaETA]             = useState<number | null>(null);
+  const [traumaMechanism, setTraumaMechanism] = useState(MECHANISMS[0]);
+  const [traumaAge, setTraumaAge]             = useState("");
+  const [traumaSex, setTraumaSex]             = useState<"M" | "F" | "U">("U");
+  const [traumaVitals, setTraumaVitals]       = useState("");
+  const [traumaGCS, setTraumaGCS]             = useState("");
+  const [showMechModal, setShowMechModal]     = useState(false);
+  const [traumaSending, setTraumaSending]     = useState(false);
 
+  // Pause / resume
+  const [alertPaused, setAlertPaused]       = useState(false);
+  const [pauseReason, setPauseReason]       = useState("");
+  const [showPauseModal, setShowPauseModal] = useState(false);
+
+  const alertActiveRef   = useRef(false);
   const wsRef            = useRef<WebSocket | null>(null);
   const reconnectTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const locationInterval = useRef<ReturnType<typeof setInterval> | null>(null);
-  const activeAlertRef   = useRef<boolean>(false);
 
   useEffect(() => {
     startLocation();
@@ -109,8 +120,9 @@ export default function EMSScreen({ onExit }: Props) {
         if (data.type === "ACK") setAckCount((c) => c + 1);
         if (data.type === "status_ack" && data.status === "arrived") {
           setTransportStatus("arrived");
-          activeAlertRef.current = false;
+          alertActiveRef.current = false;
           setTraumaActivated(false);
+          setAlertPaused(false);
         }
         if (data.type === "trauma_ack") {
           setTraumaETA(data.eta_minutes ?? null);
@@ -129,11 +141,9 @@ export default function EMSScreen({ onExit }: Props) {
   async function startLocation() {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== "granted") { setLocationLabel("GPS denied"); return; }
-
     const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
     setLocation({ lat: loc.coords.latitude, lon: loc.coords.longitude });
     setLocationLabel(`${loc.coords.latitude.toFixed(4)}, ${loc.coords.longitude.toFixed(4)}`);
-
     locationInterval.current = setInterval(async () => {
       try {
         const l = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
@@ -143,12 +153,23 @@ export default function EMSScreen({ onExit }: Props) {
     }, 10000);
   }
 
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  function sendWS(payload: object) {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(payload));
+    }
+  }
+
   // ── Transport Status ───────────────────────────────────────────────────────
   function sendStatus(status: TransportStatus) {
-    if (wsRef.current?.readyState !== WebSocket.OPEN) return;
-    wsRef.current.send(JSON.stringify({ type: "ems_status", unit_id: EMS_UNIT_ID, status }));
+    sendWS({ type: "ems_status", unit_id: EMS_UNIT_ID, status });
     setTransportStatus(status);
-    if (status === "arrived") { setAckCount(0); activeAlertRef.current = false; setTraumaActivated(false); }
+    if (status === "arrived") {
+      setAckCount(0);
+      alertActiveRef.current = false;
+      setTraumaActivated(false);
+      setAlertPaused(false);
+    }
   }
 
   function handleStatusPress(status: TransportStatus) {
@@ -166,6 +187,44 @@ export default function EMSScreen({ onExit }: Props) {
     }
   }
 
+  // ── All Clear ──────────────────────────────────────────────────────────────
+  function handleAllClear() {
+    Alert.alert(
+      "Send All Clear?",
+      "This will immediately stop all broadcasted alerts for your unit. Use once EMS has passed all vehicles.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Yes, Send All Clear",
+          style: "destructive",
+          onPress: () => {
+            sendWS({ type: "ems_clear", unit_id: EMS_UNIT_ID });
+            alertActiveRef.current = false;
+            setTransportStatus("idle");
+            setAlertPaused(false);
+            setPauseReason("");
+            setTraumaActivated(false);
+            setAckCount(0);
+          },
+        },
+      ]
+    );
+  }
+
+  // ── Pause / Resume ─────────────────────────────────────────────────────────
+  function handlePauseSelect(reason: string) {
+    setShowPauseModal(false);
+    sendWS({ type: "ems_pause", unit_id: EMS_UNIT_ID, reason });
+    setAlertPaused(true);
+    setPauseReason(reason);
+  }
+
+  function handleResume() {
+    sendWS({ type: "ems_resume", unit_id: EMS_UNIT_ID });
+    setAlertPaused(false);
+    setPauseReason("");
+  }
+
   // ── Send Alert ─────────────────────────────────────────────────────────────
   async function sendAlert(message: string, alertType?: string) {
     if (!location) { Alert.alert("No GPS", "Waiting for GPS lock."); return; }
@@ -175,8 +234,10 @@ export default function EMSScreen({ onExit }: Props) {
     setAckCount(0);
     setTraumaActivated(false);
     setTraumaETA(null);
+    setAlertPaused(false);
+    setPauseReason("");
     sendStatus("responding");
-    activeAlertRef.current = true;
+    alertActiveRef.current = true;
 
     try {
       const type = alertType ?? selectedAlertType;
@@ -191,69 +252,55 @@ export default function EMSScreen({ onExit }: Props) {
         num_patients: String(numPatients),
         alert_type: type,
       });
-
       const resp = await fetch(`${SERVER_HTTP}/trigger-alert?${params}`, { method: "POST" });
       const data = await resp.json();
-
       setAlertLog((prev) => [{
         id: data.alert_id,
         message,
         ws: data.ws_delivered ?? 0,
         time: new Date().toLocaleTimeString(),
       }, ...prev.slice(0, 9)]);
-
     } catch (e) {
       Alert.alert("Error", "Failed to send alert. Check connection.");
-      activeAlertRef.current = false;
+      alertActiveRef.current = false;
     } finally {
       setSending(false);
     }
   }
 
-  // ── Trauma Activation ──────────────────────────────────────────────────────
+  // ── Trauma ─────────────────────────────────────────────────────────────────
   function submitTrauma() {
     if (wsRef.current?.readyState !== WebSocket.OPEN) {
-      Alert.alert("Not Connected", "Cannot send trauma activation — server not connected.");
+      Alert.alert("Not Connected", "Cannot send trauma activation.");
       return;
     }
     setTraumaSending(true);
-    wsRef.current.send(JSON.stringify({
-      type: "ems_trauma",
-      unit_id: EMS_UNIT_ID,
-      mechanism: traumaMechanism,
-      num_patients: numPatients,
-      age: traumaAge,
-      sex: traumaSex,
-      vitals: traumaVitals,
-      gcs: traumaGCS,
-    }));
-    setTimeout(() => {
-      setTraumaSending(false);
-      setShowTraumaModal(false);
-    }, 600);
+    sendWS({
+      type: "ems_trauma", unit_id: EMS_UNIT_ID,
+      mechanism: traumaMechanism, num_patients: numPatients,
+      age: traumaAge, sex: traumaSex, vitals: traumaVitals, gcs: traumaGCS,
+    });
+    setTimeout(() => { setTraumaSending(false); setShowTraumaModal(false); }, 600);
   }
 
+  // ── Derived ────────────────────────────────────────────────────────────────
+  const isAlertActive = alertActiveRef.current && transportStatus !== "idle" && transportStatus !== "arrived";
   const statusColor =
     serverStatus === "connected"  ? "#22c55e" :
     serverStatus === "connecting" ? "#f59e0b" : "#ef4444";
-
   const currentStatusCfg = STATUS_CONFIG[transportStatus];
-  const hasActiveAlert = activeAlertRef.current;
 
   return (
     <SafeAreaView style={styles.container}>
 
-      {/* ── Hospital Picker Modal ── */}
+      {/* Hospital Modal */}
       <Modal visible={showHospitalModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalBox}>
             <Text style={styles.modalTitle}>Destination Hospital</Text>
             {HOSPITALS.map((h) => (
-              <TouchableOpacity
-                key={h}
-                style={[styles.modalOption, selectedHospital === h && styles.modalOptionActive]}
-                onPress={() => { setSelectedHospital(h); setShowHospitalModal(false); }}
-              >
+              <TouchableOpacity key={h} style={[styles.modalOption, selectedHospital === h && styles.modalOptionActive]}
+                onPress={() => { setSelectedHospital(h); setShowHospitalModal(false); }}>
                 <Text style={[styles.modalOptionText, selectedHospital === h && styles.modalOptionTextActive]}>{h}</Text>
               </TouchableOpacity>
             ))}
@@ -264,17 +311,14 @@ export default function EMSScreen({ onExit }: Props) {
         </View>
       </Modal>
 
-      {/* ── Alert Type Modal ── */}
+      {/* Alert Type Modal */}
       <Modal visible={showTypeModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalBox}>
             <Text style={styles.modalTitle}>Alert Type</Text>
             {ALERT_TYPES.map((t) => (
-              <TouchableOpacity
-                key={t}
-                style={[styles.modalOption, selectedAlertType === t && styles.modalOptionActive]}
-                onPress={() => { setSelectedAlertType(t); setShowTypeModal(false); }}
-              >
+              <TouchableOpacity key={t} style={[styles.modalOption, selectedAlertType === t && styles.modalOptionActive]}
+                onPress={() => { setSelectedAlertType(t); setShowTypeModal(false); }}>
                 <Text style={[styles.modalOptionText, selectedAlertType === t && styles.modalOptionTextActive]}>{t}</Text>
               </TouchableOpacity>
             ))}
@@ -285,18 +329,33 @@ export default function EMSScreen({ onExit }: Props) {
         </View>
       </Modal>
 
-      {/* ── Mechanism Picker Modal ── */}
+      {/* Pause Reason Modal */}
+      <Modal visible={showPauseModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <Text style={styles.modalTitle}>Pause Reason</Text>
+            <Text style={styles.modalSubtitle}>Alert broadcasts will stop. You must manually resume when ready.</Text>
+            {PAUSE_REASONS.map((r) => (
+              <TouchableOpacity key={r.value} style={styles.pauseOption} onPress={() => handlePauseSelect(r.value)}>
+                <Text style={styles.pauseOptionText}>{r.label}</Text>
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity style={styles.modalCancel} onPress={() => setShowPauseModal(false)}>
+              <Text style={styles.modalCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Mechanism Modal */}
       <Modal visible={showMechModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <ScrollView>
             <View style={styles.modalBox}>
               <Text style={styles.modalTitle}>Mechanism of Injury</Text>
               {MECHANISMS.map((m) => (
-                <TouchableOpacity
-                  key={m}
-                  style={[styles.modalOption, traumaMechanism === m && styles.modalOptionActive]}
-                  onPress={() => { setTraumaMechanism(m); setShowMechModal(false); }}
-                >
+                <TouchableOpacity key={m} style={[styles.modalOption, traumaMechanism === m && styles.modalOptionActive]}
+                  onPress={() => { setTraumaMechanism(m); setShowMechModal(false); }}>
                   <Text style={[styles.modalOptionText, traumaMechanism === m && styles.modalOptionTextActive]}>{m}</Text>
                 </TouchableOpacity>
               ))}
@@ -308,46 +367,31 @@ export default function EMSScreen({ onExit }: Props) {
         </View>
       </Modal>
 
-      {/* ── Trauma Activation Modal ── */}
+      {/* Trauma Modal */}
       <Modal visible={showTraumaModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <ScrollView keyboardShouldPersistTaps="handled">
             <View style={[styles.modalBox, styles.traumaModalBox]}>
               <Text style={styles.traumaModalHeader}>🚨 TRAUMA ACTIVATION</Text>
-              <Text style={styles.traumaModalSub}>
-                Sending to: {selectedHospital}
-              </Text>
+              <Text style={styles.traumaModalSub}>Sending to: {selectedHospital}</Text>
 
-              {/* Mechanism */}
               <Text style={styles.traumaFieldLabel}>MECHANISM OF INJURY</Text>
               <TouchableOpacity style={styles.traumaSelector} onPress={() => setShowMechModal(true)}>
                 <Text style={styles.traumaSelectorText}>{traumaMechanism}</Text>
                 <Text style={styles.configChevron}>›</Text>
               </TouchableOpacity>
 
-              {/* Age + Sex */}
               <View style={styles.traumaRow}>
                 <View style={{ flex: 1, marginRight: 10 }}>
                   <Text style={styles.traumaFieldLabel}>AGE</Text>
-                  <TextInput
-                    style={styles.traumaInput}
-                    placeholder="e.g. 34"
-                    placeholderTextColor="#374151"
-                    value={traumaAge}
-                    onChangeText={setTraumaAge}
-                    keyboardType="number-pad"
-                    maxLength={3}
-                  />
+                  <TextInput style={styles.traumaInput} placeholder="e.g. 34" placeholderTextColor="#374151"
+                    value={traumaAge} onChangeText={setTraumaAge} keyboardType="number-pad" maxLength={3} />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.traumaFieldLabel}>SEX</Text>
                   <View style={styles.sexRow}>
                     {(["M", "F", "U"] as const).map((s) => (
-                      <TouchableOpacity
-                        key={s}
-                        style={[styles.sexBtn, traumaSex === s && styles.sexBtnActive]}
-                        onPress={() => setTraumaSex(s)}
-                      >
+                      <TouchableOpacity key={s} style={[styles.sexBtn, traumaSex === s && styles.sexBtnActive]} onPress={() => setTraumaSex(s)}>
                         <Text style={[styles.sexBtnText, traumaSex === s && styles.sexBtnTextActive]}>
                           {s === "M" ? "Male" : s === "F" ? "Female" : "Unk"}
                         </Text>
@@ -357,29 +401,14 @@ export default function EMSScreen({ onExit }: Props) {
                 </View>
               </View>
 
-              {/* Vitals */}
               <Text style={styles.traumaFieldLabel}>VITALS (BP / HR / RR / SpO2)</Text>
-              <TextInput
-                style={styles.traumaInput}
-                placeholder="e.g. 90/60 · HR 120 · RR 24 · SpO2 94%"
-                placeholderTextColor="#374151"
-                value={traumaVitals}
-                onChangeText={setTraumaVitals}
-              />
+              <TextInput style={styles.traumaInput} placeholder="e.g. 90/60 · HR 120 · RR 24 · SpO2 94%"
+                placeholderTextColor="#374151" value={traumaVitals} onChangeText={setTraumaVitals} />
 
-              {/* GCS */}
               <Text style={styles.traumaFieldLabel}>GCS SCORE</Text>
-              <TextInput
-                style={styles.traumaInput}
-                placeholder="e.g. 12 (E3 V4 M5)"
-                placeholderTextColor="#374151"
-                value={traumaGCS}
-                onChangeText={setTraumaGCS}
-                keyboardType="default"
-                maxLength={20}
-              />
+              <TextInput style={styles.traumaInput} placeholder="e.g. 12 (E3 V4 M5)"
+                placeholderTextColor="#374151" value={traumaGCS} onChangeText={setTraumaGCS} maxLength={20} />
 
-              {/* Patients (pre-filled, editable) */}
               <Text style={styles.traumaFieldLabel}>NUMBER OF PATIENTS</Text>
               <View style={styles.patientCounter}>
                 <TouchableOpacity style={styles.counterBtn} onPress={() => setNumPatients((n) => Math.max(1, n - 1))}>
@@ -391,17 +420,10 @@ export default function EMSScreen({ onExit }: Props) {
                 </TouchableOpacity>
               </View>
 
-              {/* Submit */}
-              <TouchableOpacity
-                style={[styles.traumaSubmitBtn, traumaSending && { opacity: 0.6 }]}
-                onPress={submitTrauma}
-                disabled={traumaSending}
-              >
-                <Text style={styles.traumaSubmitText}>
-                  {traumaSending ? "Sending..." : "🚨 ACTIVATE TRAUMA TEAM"}
-                </Text>
+              <TouchableOpacity style={[styles.traumaSubmitBtn, traumaSending && { opacity: 0.6 }]}
+                onPress={submitTrauma} disabled={traumaSending}>
+                <Text style={styles.traumaSubmitText}>{traumaSending ? "Sending..." : "🚨 ACTIVATE TRAUMA TEAM"}</Text>
               </TouchableOpacity>
-
               <TouchableOpacity style={styles.modalCancel} onPress={() => setShowTraumaModal(false)}>
                 <Text style={styles.modalCancelText}>Cancel</Text>
               </TouchableOpacity>
@@ -410,7 +432,7 @@ export default function EMSScreen({ onExit }: Props) {
         </View>
       </Modal>
 
-      {/* ── Header ── */}
+      {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={onExit} style={styles.backBtn}>
           <Text style={styles.backText}>← Back</Text>
@@ -426,7 +448,7 @@ export default function EMSScreen({ onExit }: Props) {
         <Text style={styles.pageTitle}>EMS Dashboard</Text>
         <Text style={styles.pageSubtitle}>Polk County Rescue Operations</Text>
 
-        {/* Trauma activated banner */}
+        {/* Trauma banner */}
         {traumaActivated && (
           <View style={styles.traumaBanner}>
             <Text style={styles.traumaBannerIcon}>🚨</Text>
@@ -436,6 +458,20 @@ export default function EMSScreen({ onExit }: Props) {
                 {selectedHospital}{traumaETA !== null ? ` · ETA ${traumaETA} min` : ""}
               </Text>
             </View>
+          </View>
+        )}
+
+        {/* Paused banner */}
+        {alertPaused && (
+          <View style={styles.pausedBanner}>
+            <Text style={styles.pausedBannerIcon}>⏸</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.pausedBannerTitle}>ALERT PAUSED</Text>
+              <Text style={styles.pausedBannerSub}>{pauseReason}</Text>
+            </View>
+            <TouchableOpacity style={styles.resumeInlinBtn} onPress={handleResume}>
+              <Text style={styles.resumeInlinBtnText}>▶ Resume</Text>
+            </TouchableOpacity>
           </View>
         )}
 
@@ -460,28 +496,39 @@ export default function EMSScreen({ onExit }: Props) {
               const cfg = STATUS_CONFIG[s];
               const isActive = transportStatus === s;
               return (
-                <TouchableOpacity
-                  key={s}
+                <TouchableOpacity key={s}
                   style={[styles.transportBtn, { borderColor: cfg.color }, isActive && { backgroundColor: cfg.bg }]}
-                  onPress={() => handleStatusPress(s)}
-                  activeOpacity={0.75}
-                >
-                  <Text style={[styles.transportBtnText, { color: isActive ? cfg.color : "#6b7280" }]}>
-                    {cfg.label}
-                  </Text>
+                  onPress={() => handleStatusPress(s)} activeOpacity={0.75}>
+                  <Text style={[styles.transportBtnText, { color: isActive ? cfg.color : "#6b7280" }]}>{cfg.label}</Text>
                 </TouchableOpacity>
               );
             })}
           </View>
         </View>
 
-        {/* Trauma Activation Button — only visible when an alert is active */}
-        {transportStatus !== "idle" && transportStatus !== "arrived" && (
+        {/* Alert controls — visible only when alert is active */}
+        {isAlertActive && (
+          <View style={styles.alertControls}>
+            {alertPaused ? (
+              <TouchableOpacity style={[styles.controlBtn, styles.resumeControlBtn]} onPress={handleResume} activeOpacity={0.8}>
+                <Text style={styles.resumeControlText}>▶  Resume Alert</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity style={[styles.controlBtn, styles.pauseControlBtn]} onPress={() => setShowPauseModal(true)} activeOpacity={0.8}>
+                <Text style={styles.pauseControlText}>⏸  Pause Alert</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity style={[styles.controlBtn, styles.clearControlBtn]} onPress={handleAllClear} activeOpacity={0.8}>
+              <Text style={styles.clearControlText}>✓  All Clear</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Trauma button */}
+        {isAlertActive && (
           <TouchableOpacity
             style={[styles.traumaBtn, traumaActivated && styles.traumaBtnActivated]}
-            onPress={() => setShowTraumaModal(true)}
-            activeOpacity={0.8}
-          >
+            onPress={() => setShowTraumaModal(true)} activeOpacity={0.8}>
             <Text style={styles.traumaBtnText}>
               {traumaActivated ? "✓ Trauma Activated — Update" : "🚨 Activate Trauma"}
             </Text>
@@ -532,13 +579,10 @@ export default function EMSScreen({ onExit }: Props) {
         <Text style={styles.sectionTitle}>QUICK ALERTS</Text>
         <View style={styles.presets}>
           {PRESETS.map((preset) => (
-            <TouchableOpacity
-              key={preset.label}
+            <TouchableOpacity key={preset.label}
               style={[styles.presetBtn, sending && styles.presetDisabled]}
               onPress={() => sendAlert(preset.message, preset.type)}
-              disabled={sending}
-              activeOpacity={0.75}
-            >
+              disabled={sending} activeOpacity={0.75}>
               <Text style={styles.presetLabel}>{preset.label}</Text>
               <Text style={styles.presetMessage} numberOfLines={1}>{preset.message}</Text>
             </TouchableOpacity>
@@ -548,20 +592,13 @@ export default function EMSScreen({ onExit }: Props) {
         {/* Custom Alert */}
         <Text style={styles.sectionTitle}>CUSTOM ALERT</Text>
         <View style={styles.customBox}>
-          <TextInput
-            style={styles.input}
-            placeholder="Type custom alert message..."
-            placeholderTextColor="#475569"
-            value={customMessage}
-            onChangeText={setCustomMessage}
-            multiline
-            maxLength={200}
-          />
+          <TextInput style={styles.input} placeholder="Type custom alert message..."
+            placeholderTextColor="#475569" value={customMessage} onChangeText={setCustomMessage}
+            multiline maxLength={200} />
           <TouchableOpacity
             style={[styles.sendBtn, (!customMessage.trim() || sending) && styles.sendBtnDisabled]}
             onPress={() => { sendAlert(customMessage); setCustomMessage(""); }}
-            disabled={!customMessage.trim() || sending}
-          >
+            disabled={!customMessage.trim() || sending}>
             <Text style={styles.sendBtnText}>{sending ? "Sending..." : "🚨 Send Alert"}</Text>
           </TouchableOpacity>
         </View>
@@ -613,10 +650,16 @@ const styles = StyleSheet.create({
   scrollContent:          { paddingHorizontal: 24, paddingBottom: 48 },
   pageTitle:              { fontSize: 32, fontWeight: "900", color: "#f8fafc", marginBottom: 4 },
   pageSubtitle:           { fontSize: 13, color: "#4b5563", marginBottom: 24 },
-  traumaBanner:           { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: "#450a0a", borderRadius: 12, padding: 14, marginBottom: 16, borderWidth: 1, borderColor: "#dc2626" },
+  traumaBanner:           { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: "#450a0a", borderRadius: 12, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: "#dc2626" },
   traumaBannerIcon:       { fontSize: 24 },
   traumaBannerTitle:      { fontSize: 13, fontWeight: "900", color: "#ef4444", letterSpacing: 1 },
   traumaBannerSub:        { fontSize: 12, color: "#fca5a5", marginTop: 2 },
+  pausedBanner:           { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: "#1c1400", borderRadius: 12, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: "#f59e0b" },
+  pausedBannerIcon:       { fontSize: 20 },
+  pausedBannerTitle:      { fontSize: 13, fontWeight: "900", color: "#f59e0b", letterSpacing: 1 },
+  pausedBannerSub:        { fontSize: 12, color: "#fcd34d", marginTop: 2 },
+  resumeInlinBtn:         { backgroundColor: "#f59e0b", borderRadius: 8, paddingVertical: 8, paddingHorizontal: 14 },
+  resumeInlinBtnText:     { color: "#000", fontSize: 12, fontWeight: "800" },
   statusRow:              { flexDirection: "row", gap: 10, marginBottom: 20 },
   pill:                   { flex: 1, backgroundColor: "#111827", borderRadius: 12, padding: 12, alignItems: "center" },
   pillLabel:              { fontSize: 10, color: "#6b7280", fontWeight: "700", letterSpacing: 1, marginBottom: 4 },
@@ -629,6 +672,14 @@ const styles = StyleSheet.create({
   transportButtons:       { flexDirection: "row", gap: 8 },
   transportBtn:           { flex: 1, borderRadius: 10, borderWidth: 1, paddingVertical: 10, alignItems: "center" },
   transportBtnText:       { fontSize: 11, fontWeight: "800", letterSpacing: 0.3 },
+  alertControls:          { flexDirection: "row", gap: 10, marginBottom: 12 },
+  controlBtn:             { flex: 1, borderRadius: 12, padding: 14, alignItems: "center", borderWidth: 1 },
+  pauseControlBtn:        { backgroundColor: "#1c1400", borderColor: "#f59e0b" },
+  pauseControlText:       { color: "#f59e0b", fontSize: 13, fontWeight: "800" },
+  resumeControlBtn:       { backgroundColor: "#052e16", borderColor: "#22c55e" },
+  resumeControlText:      { color: "#22c55e", fontSize: 13, fontWeight: "800" },
+  clearControlBtn:        { backgroundColor: "#0a1628", borderColor: "#3b82f6" },
+  clearControlText:       { color: "#3b82f6", fontSize: 13, fontWeight: "800" },
   traumaBtn:              { backgroundColor: "#450a0a", borderRadius: 12, padding: 16, alignItems: "center", borderWidth: 1, borderColor: "#dc2626", marginBottom: 24 },
   traumaBtnActivated:     { backgroundColor: "#052e16", borderColor: "#22c55e" },
   traumaBtnText:          { color: "#ef4444", fontSize: 14, fontWeight: "900", letterSpacing: 0.5 },
@@ -665,17 +716,18 @@ const styles = StyleSheet.create({
   logRight:               { alignItems: "flex-end" },
   logTime:                { fontSize: 12, color: "#6b7280", marginBottom: 2 },
   logDelivered:           { fontSize: 11, color: "#22c55e", fontWeight: "600" },
-  // Modals
   modalOverlay:           { flex: 1, backgroundColor: "rgba(0,0,0,0.7)", justifyContent: "flex-end" },
   modalBox:               { backgroundColor: "#111827", borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24, paddingBottom: 40 },
-  modalTitle:             { fontSize: 11, color: "#6b7280", fontWeight: "800", letterSpacing: 2, marginBottom: 16, textTransform: "uppercase" },
+  modalTitle:             { fontSize: 11, color: "#6b7280", fontWeight: "800", letterSpacing: 2, marginBottom: 8, textTransform: "uppercase" },
+  modalSubtitle:          { fontSize: 12, color: "#4b5563", marginBottom: 16 },
   modalOption:            { paddingVertical: 16, paddingHorizontal: 12, borderRadius: 10, marginBottom: 4 },
   modalOptionActive:      { backgroundColor: "#1f2937" },
   modalOptionText:        { fontSize: 15, color: "#9ca3af", fontWeight: "600" },
   modalOptionTextActive:  { color: "#f8fafc", fontWeight: "800" },
+  pauseOption:            { paddingVertical: 18, paddingHorizontal: 16, borderRadius: 10, marginBottom: 8, backgroundColor: "#1c1400", borderWidth: 1, borderColor: "#92400e" },
+  pauseOptionText:        { fontSize: 15, color: "#fcd34d", fontWeight: "700" },
   modalCancel:            { marginTop: 8, paddingVertical: 16, alignItems: "center" },
   modalCancelText:        { fontSize: 15, color: "#ef4444", fontWeight: "700" },
-  // Trauma modal
   traumaModalBox:         { borderRadius: 20, marginTop: 60 },
   traumaModalHeader:      { fontSize: 20, fontWeight: "900", color: "#ef4444", letterSpacing: 1, marginBottom: 4 },
   traumaModalSub:         { fontSize: 12, color: "#6b7280", marginBottom: 24 },
