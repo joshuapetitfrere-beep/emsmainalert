@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
   View, Text, StyleSheet, TouchableOpacity,
-  ScrollView, TextInput, SafeAreaView, Alert,
+  ScrollView, TextInput, SafeAreaView, Alert, Modal,
 } from "react-native";
 import * as Location from "expo-location";
 
@@ -10,31 +10,53 @@ const SERVER_WS   = "wss://emsmainalert-production.up.railway.app/ws";
 const EMS_UNIT_ID = "POLK-RESCUE-1";
 const EMS_API_KEY = "62128e4a5ac6411b3b75bca62c7b1f0b2f8b7332fa23281dd200c34818746a43";
 
-const PRESETS = [
-  { label: "🔥 Fire",           message: "Fire Rescue responding — emergency vehicle approaching" },
-  { label: "🚑 Medical",        message: "Medical Emergency — ambulance approaching, please yield" },
-  { label: "🚔 Police",         message: "Police Emergency — law enforcement vehicle approaching" },
-  { label: "✅ All Clear",      message: "All Clear — emergency vehicles have cleared the area" },
+const HOSPITALS = [
+  "Lakeland Regional Health",
+  "Bartow Regional Medical Center",
+  "Winter Haven Hospital",
+  "South Florida Baptist Hospital",
+  "AdventHealth Heart of Florida",
+  "AdventHealth Lake Wales",
 ];
 
-interface ACKEvent {
-  alert_id: string;
-  time: string;
-}
+const ALERT_TYPES = ["Medical", "Trauma", "Cardiac", "Stroke", "Fire", "Police", "Other"];
+
+const PRESETS = [
+  { label: "🔥 Fire",      message: "Fire Rescue responding — emergency vehicle approaching",  type: "Fire"    },
+  { label: "🚑 Medical",   message: "Medical Emergency — ambulance approaching, please yield", type: "Medical" },
+  { label: "🚔 Police",    message: "Police Emergency — law enforcement vehicle approaching",  type: "Police"  },
+  { label: "✅ All Clear", message: "All Clear — emergency vehicles have cleared the area",    type: "Other"   },
+];
+
+type TransportStatus = "idle" | "responding" | "transporting" | "arrived";
+
+const STATUS_CONFIG: Record<TransportStatus, { label: string; color: string; bg: string }> = {
+  idle:         { label: "Idle",         color: "#6b7280", bg: "#1f2937" },
+  responding:   { label: "Responding",   color: "#f59e0b", bg: "#2d1f00" },
+  transporting: { label: "Transporting", color: "#3b82f6", bg: "#0d1f3c" },
+  arrived:      { label: "Arrived",      color: "#22c55e", bg: "#052e16" },
+};
 
 interface Props {
   onExit: () => void;
 }
 
 export default function EMSScreen({ onExit }: Props) {
-  const [location, setLocation]         = useState<{ lat: number; lon: number } | null>(null);
-  const [locationLabel, setLocationLabel] = useState("Acquiring GPS...");
-  const [serverStatus, setServerStatus] = useState<"connecting" | "connected" | "disconnected">("connecting");
-  const [customMessage, setCustomMessage] = useState("");
-  const [sending, setSending]           = useState(false);
-  const [lastAlertId, setLastAlertId]   = useState<string | null>(null);
-  const [ackCount, setAckCount]         = useState(0);
-  const [alertLog, setAlertLog]         = useState<{ id: string; message: string; ws: number; time: string }[]>([]);
+  const [location, setLocation]               = useState<{ lat: number; lon: number } | null>(null);
+  const [locationLabel, setLocationLabel]     = useState("Acquiring GPS...");
+  const [serverStatus, setServerStatus]       = useState<"connecting" | "connected" | "disconnected">("connecting");
+  const [customMessage, setCustomMessage]     = useState("");
+  const [sending, setSending]                 = useState(false);
+  const [ackCount, setAckCount]               = useState(0);
+  const [alertLog, setAlertLog]               = useState<{ id: string; message: string; ws: number; time: string }[]>([]);
+  const [transportStatus, setTransportStatus] = useState<TransportStatus>("idle");
+
+  // Alert config state
+  const [selectedHospital, setSelectedHospital] = useState<string>(HOSPITALS[0]);
+  const [selectedAlertType, setSelectedAlertType] = useState<string>("Medical");
+  const [numPatients, setNumPatients]           = useState<number>(1);
+  const [showHospitalModal, setShowHospitalModal] = useState(false);
+  const [showTypeModal, setShowTypeModal]       = useState(false);
 
   const wsRef            = useRef<WebSocket | null>(null);
   const reconnectTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -50,7 +72,7 @@ export default function EMSScreen({ onExit }: Props) {
     };
   }, []);
 
-  // ── WebSocket for ACK listening ────────────────────────────────────────────
+  // ── WebSocket ──────────────────────────────────────────────────────────────
   function connectWebSocket() {
     setServerStatus("connecting");
     const ws = new WebSocket(SERVER_WS);
@@ -58,16 +80,14 @@ export default function EMSScreen({ onExit }: Props) {
 
     ws.onopen = () => {
       setServerStatus("connected");
-      // Identify as EMS unit so server doesn't send alerts back to us
       ws.send(JSON.stringify({ type: "ems_unit", unit_id: EMS_UNIT_ID }));
     };
 
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        if (data.type === "ACK") {
-          setAckCount((c) => c + 1);
-        }
+        if (data.type === "ACK") setAckCount((c) => c + 1);
+        if (data.type === "status_ack" && data.status === "arrived") setTransportStatus("arrived");
       } catch (e) {}
     };
 
@@ -95,8 +115,31 @@ export default function EMSScreen({ onExit }: Props) {
     }, 10000);
   }
 
+  // ── Transport Status ───────────────────────────────────────────────────────
+  function sendStatus(status: TransportStatus) {
+    if (wsRef.current?.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({ type: "ems_status", unit_id: EMS_UNIT_ID, status }));
+    setTransportStatus(status);
+    if (status === "arrived") { setAckCount(0); }
+  }
+
+  function handleStatusPress(status: TransportStatus) {
+    if (status === "arrived") {
+      Alert.alert(
+        "Mark as Arrived?",
+        "This will automatically end all broadcasted alerts for your unit.",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Yes, Arrived", style: "destructive", onPress: () => sendStatus("arrived") },
+        ]
+      );
+    } else {
+      sendStatus(status);
+    }
+  }
+
   // ── Trigger Alert ──────────────────────────────────────────────────────────
-  async function sendAlert(message: string) {
+  async function sendAlert(message: string, alertType?: string) {
     if (!location) {
       Alert.alert("No GPS", "Waiting for GPS lock. Please wait a moment.");
       return;
@@ -108,13 +151,25 @@ export default function EMSScreen({ onExit }: Props) {
 
     setSending(true);
     setAckCount(0);
+    sendStatus("responding");
 
     try {
-      const url = `${SERVER_HTTP}/trigger-alert?lat=${location.lat}&lon=${location.lon}&alert_message=${encodeURIComponent(message)}&radius=2.0&ems_unit_id=${EMS_UNIT_ID}`;
-      const resp = await fetch(url, { method: "POST" });
+      const type = alertType ?? selectedAlertType;
+      const params = new URLSearchParams({
+        lat: String(location.lat),
+        lon: String(location.lon),
+        alert_message: message,
+        radius: "2.0",
+        ems_unit_id: EMS_UNIT_ID,
+        api_key: EMS_API_KEY,
+        destination_hospital: selectedHospital,
+        num_patients: String(numPatients),
+        alert_type: type,
+      });
+
+      const resp = await fetch(`${SERVER_HTTP}/trigger-alert?${params}`, { method: "POST" });
       const data = await resp.json();
 
-      setLastAlertId(data.alert_id);
       setAlertLog((prev) => [{
         id: data.alert_id,
         message,
@@ -130,11 +185,60 @@ export default function EMSScreen({ onExit }: Props) {
   }
 
   const statusColor =
-    serverStatus === "connected" ? "#22c55e" :
+    serverStatus === "connected"  ? "#22c55e" :
     serverStatus === "connecting" ? "#f59e0b" : "#ef4444";
+
+  const currentStatusCfg = STATUS_CONFIG[transportStatus];
 
   return (
     <SafeAreaView style={styles.container}>
+
+      {/* Hospital Picker Modal */}
+      <Modal visible={showHospitalModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <Text style={styles.modalTitle}>Select Destination Hospital</Text>
+            {HOSPITALS.map((h) => (
+              <TouchableOpacity
+                key={h}
+                style={[styles.modalOption, selectedHospital === h && styles.modalOptionActive]}
+                onPress={() => { setSelectedHospital(h); setShowHospitalModal(false); }}
+              >
+                <Text style={[styles.modalOptionText, selectedHospital === h && styles.modalOptionTextActive]}>
+                  {h}
+                </Text>
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity style={styles.modalCancel} onPress={() => setShowHospitalModal(false)}>
+              <Text style={styles.modalCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Alert Type Picker Modal */}
+      <Modal visible={showTypeModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <Text style={styles.modalTitle}>Select Alert Type</Text>
+            {ALERT_TYPES.map((t) => (
+              <TouchableOpacity
+                key={t}
+                style={[styles.modalOption, selectedAlertType === t && styles.modalOptionActive]}
+                onPress={() => { setSelectedAlertType(t); setShowTypeModal(false); }}
+              >
+                <Text style={[styles.modalOptionText, selectedAlertType === t && styles.modalOptionTextActive]}>
+                  {t}
+                </Text>
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity style={styles.modalCancel} onPress={() => setShowTypeModal(false)}>
+              <Text style={styles.modalCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={onExit} style={styles.backBtn}>
@@ -148,15 +252,89 @@ export default function EMSScreen({ onExit }: Props) {
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
 
-        {/* Title */}
         <Text style={styles.pageTitle}>EMS Dashboard</Text>
         <Text style={styles.pageSubtitle}>Polk County Rescue Operations</Text>
 
-        {/* Status Row */}
+        {/* Status Pills */}
         <View style={styles.statusRow}>
-          <StatusPill label="GPS" value={location ? "Active ✓" : locationLabel} ok={!!location} />
+          <StatusPill label="GPS"    value={location ? "Active ✓" : locationLabel} ok={!!location} />
           <StatusPill label="Server" value={serverStatus === "connected" ? "Live ✓" : serverStatus} ok={serverStatus === "connected"} />
-          <StatusPill label="ACKs" value={`${ackCount}`} ok={ackCount > 0} />
+          <StatusPill label="ACKs"   value={`${ackCount}`} ok={ackCount > 0} />
+        </View>
+
+        {/* Unit Status */}
+        <Text style={styles.sectionTitle}>UNIT STATUS</Text>
+        <View style={[styles.transportBar, { borderColor: currentStatusCfg.color + "40" }]}>
+          <View style={styles.transportCurrent}>
+            <Text style={styles.transportCurrentLabel}>Current Status</Text>
+            <Text style={[styles.transportCurrentValue, { color: currentStatusCfg.color }]}>
+              {currentStatusCfg.label}
+            </Text>
+          </View>
+          <View style={styles.transportButtons}>
+            {(["responding", "transporting", "arrived"] as TransportStatus[]).map((s) => {
+              const cfg = STATUS_CONFIG[s];
+              const isActive = transportStatus === s;
+              return (
+                <TouchableOpacity
+                  key={s}
+                  style={[styles.transportBtn, { borderColor: cfg.color }, isActive && { backgroundColor: cfg.bg }]}
+                  onPress={() => handleStatusPress(s)}
+                  activeOpacity={0.75}
+                >
+                  <Text style={[styles.transportBtnText, { color: isActive ? cfg.color : "#6b7280" }]}>
+                    {cfg.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+
+        {/* Alert Config */}
+        <Text style={styles.sectionTitle}>ALERT CONFIGURATION</Text>
+        <View style={styles.configBox}>
+          {/* Hospital */}
+          <View style={styles.configRow}>
+            <Text style={styles.configLabel}>🏥  Destination</Text>
+            <TouchableOpacity style={styles.configSelector} onPress={() => setShowHospitalModal(true)}>
+              <Text style={styles.configSelectorText} numberOfLines={1}>{selectedHospital}</Text>
+              <Text style={styles.configChevron}>›</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.configDivider} />
+
+          {/* Alert Type */}
+          <View style={styles.configRow}>
+            <Text style={styles.configLabel}>🚨  Alert Type</Text>
+            <TouchableOpacity style={styles.configSelector} onPress={() => setShowTypeModal(true)}>
+              <Text style={styles.configSelectorText}>{selectedAlertType}</Text>
+              <Text style={styles.configChevron}>›</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.configDivider} />
+
+          {/* Patients */}
+          <View style={styles.configRow}>
+            <Text style={styles.configLabel}>🧑‍⚕️  Patients</Text>
+            <View style={styles.patientCounter}>
+              <TouchableOpacity
+                style={styles.counterBtn}
+                onPress={() => setNumPatients((n) => Math.max(1, n - 1))}
+              >
+                <Text style={styles.counterBtnText}>−</Text>
+              </TouchableOpacity>
+              <Text style={styles.counterValue}>{numPatients}</Text>
+              <TouchableOpacity
+                style={styles.counterBtn}
+                onPress={() => setNumPatients((n) => Math.min(20, n + 1))}
+              >
+                <Text style={styles.counterBtnText}>+</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
 
         {/* Location */}
@@ -173,7 +351,7 @@ export default function EMSScreen({ onExit }: Props) {
             <TouchableOpacity
               key={preset.label}
               style={[styles.presetBtn, sending && styles.presetDisabled]}
-              onPress={() => sendAlert(preset.message)}
+              onPress={() => sendAlert(preset.message, preset.type)}
               disabled={sending}
               activeOpacity={0.75}
             >
@@ -240,43 +418,69 @@ function StatusPill({ label, value, ok }: { label: string; value: string; ok: bo
 }
 
 const styles = StyleSheet.create({
-  container:       { flex: 1, backgroundColor: "#0a0a0f" },
-  header:          { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 24, paddingTop: 12, paddingBottom: 8 },
-  backBtn:         { padding: 4 },
-  backText:        { color: "#ef4444", fontSize: 15, fontWeight: "600" },
-  headerRight:     { flexDirection: "row", alignItems: "center", gap: 10 },
-  unitLabel:       { color: "#ef4444", fontSize: 12, fontWeight: "800", letterSpacing: 1 },
-  dot:             { width: 10, height: 10, borderRadius: 5 },
-  scroll:          { flex: 1 },
-  scrollContent:   { paddingHorizontal: 24, paddingBottom: 48 },
-  pageTitle:       { fontSize: 32, fontWeight: "900", color: "#f8fafc", marginBottom: 4 },
-  pageSubtitle:    { fontSize: 13, color: "#4b5563", marginBottom: 24 },
-  statusRow:       { flexDirection: "row", gap: 10, marginBottom: 16 },
-  pill:            { flex: 1, backgroundColor: "#111827", borderRadius: 12, padding: 12, alignItems: "center" },
-  pillLabel:       { fontSize: 10, color: "#6b7280", fontWeight: "700", letterSpacing: 1, marginBottom: 4 },
-  pillValue:       { fontSize: 12, fontWeight: "800" },
-  locBox:          { backgroundColor: "#111827", borderRadius: 14, padding: 16, marginBottom: 24, borderLeftWidth: 3, borderLeftColor: "#ef4444" },
-  locLabel:        { fontSize: 11, color: "#6b7280", fontWeight: "700", letterSpacing: 1, marginBottom: 4 },
-  locValue:        { fontSize: 15, color: "#f8fafc", fontWeight: "700", marginBottom: 4 },
-  locRadius:       { fontSize: 12, color: "#4b5563" },
-  sectionTitle:    { fontSize: 11, color: "#4b5563", fontWeight: "800", letterSpacing: 2, marginBottom: 12, marginTop: 8 },
-  presets:         { gap: 10, marginBottom: 24 },
-  presetBtn:       { backgroundColor: "#1a0a0a", borderRadius: 14, padding: 16, borderWidth: 1, borderColor: "#7f1d1d" },
-  presetDisabled:  { opacity: 0.5 },
-  presetLabel:     { fontSize: 15, fontWeight: "800", color: "#f8fafc", marginBottom: 4 },
-  presetMessage:   { fontSize: 12, color: "#6b7280" },
-  customBox:       { backgroundColor: "#111827", borderRadius: 14, padding: 16, marginBottom: 24, gap: 12 },
-  input:           { color: "#f8fafc", fontSize: 15, lineHeight: 22, minHeight: 80 },
-  sendBtn:         { backgroundColor: "#dc2626", borderRadius: 12, paddingVertical: 16, alignItems: "center" },
-  sendBtnDisabled: { backgroundColor: "#4b1414", opacity: 0.6 },
-  sendBtnText:     { color: "#fff", fontSize: 16, fontWeight: "800" },
-  logBox:          { backgroundColor: "#111827", borderRadius: 14, overflow: "hidden" },
-  logRow:          { flexDirection: "row", justifyContent: "space-between", padding: 14, borderBottomWidth: 1, borderBottomColor: "#1f2937" },
-  logLeft:         { flex: 1, marginRight: 12 },
-  logMessage:      { fontSize: 13, color: "#f8fafc", fontWeight: "600", marginBottom: 2 },
-  logId:           { fontSize: 10, color: "#374151" },
-  logRight:        { alignItems: "flex-end" },
-  logTime:         { fontSize: 12, color: "#6b7280", marginBottom: 2 },
-  logDelivered:    { fontSize: 11, color: "#22c55e", fontWeight: "600" },
+  container:              { flex: 1, backgroundColor: "#0a0a0f" },
+  header:                 { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 24, paddingTop: 12, paddingBottom: 8 },
+  backBtn:                { padding: 4 },
+  backText:               { color: "#ef4444", fontSize: 15, fontWeight: "600" },
+  headerRight:            { flexDirection: "row", alignItems: "center", gap: 10 },
+  unitLabel:              { color: "#ef4444", fontSize: 12, fontWeight: "800", letterSpacing: 1 },
+  dot:                    { width: 10, height: 10, borderRadius: 5 },
+  scroll:                 { flex: 1 },
+  scrollContent:          { paddingHorizontal: 24, paddingBottom: 48 },
+  pageTitle:              { fontSize: 32, fontWeight: "900", color: "#f8fafc", marginBottom: 4 },
+  pageSubtitle:           { fontSize: 13, color: "#4b5563", marginBottom: 24 },
+  statusRow:              { flexDirection: "row", gap: 10, marginBottom: 20 },
+  pill:                   { flex: 1, backgroundColor: "#111827", borderRadius: 12, padding: 12, alignItems: "center" },
+  pillLabel:              { fontSize: 10, color: "#6b7280", fontWeight: "700", letterSpacing: 1, marginBottom: 4 },
+  pillValue:              { fontSize: 12, fontWeight: "800" },
+  sectionTitle:           { fontSize: 11, color: "#4b5563", fontWeight: "800", letterSpacing: 2, marginBottom: 12, marginTop: 8 },
+  transportBar:           { backgroundColor: "#111827", borderRadius: 14, padding: 16, borderWidth: 1, marginBottom: 24 },
+  transportCurrent:       { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
+  transportCurrentLabel:  { fontSize: 12, color: "#6b7280", fontWeight: "600" },
+  transportCurrentValue:  { fontSize: 15, fontWeight: "900", letterSpacing: 0.5 },
+  transportButtons:       { flexDirection: "row", gap: 8 },
+  transportBtn:           { flex: 1, borderRadius: 10, borderWidth: 1, paddingVertical: 10, alignItems: "center" },
+  transportBtnText:       { fontSize: 11, fontWeight: "800", letterSpacing: 0.3 },
+  configBox:              { backgroundColor: "#111827", borderRadius: 14, padding: 4, marginBottom: 16 },
+  configRow:              { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 12, paddingVertical: 14 },
+  configLabel:            { fontSize: 13, color: "#9ca3af", fontWeight: "600" },
+  configSelector:         { flexDirection: "row", alignItems: "center", gap: 6, maxWidth: "55%" },
+  configSelectorText:     { fontSize: 13, color: "#f8fafc", fontWeight: "700", textAlign: "right" },
+  configChevron:          { fontSize: 20, color: "#4b5563", lineHeight: 22 },
+  configDivider:          { height: 1, backgroundColor: "#1f2937", marginHorizontal: 12 },
+  patientCounter:         { flexDirection: "row", alignItems: "center", gap: 16 },
+  counterBtn:             { width: 32, height: 32, borderRadius: 8, backgroundColor: "#1f2937", alignItems: "center", justifyContent: "center" },
+  counterBtnText:         { fontSize: 20, color: "#f8fafc", lineHeight: 24 },
+  counterValue:           { fontSize: 18, color: "#f8fafc", fontWeight: "800", minWidth: 24, textAlign: "center" },
+  locBox:                 { backgroundColor: "#111827", borderRadius: 14, padding: 16, marginBottom: 24, borderLeftWidth: 3, borderLeftColor: "#ef4444" },
+  locLabel:               { fontSize: 11, color: "#6b7280", fontWeight: "700", letterSpacing: 1, marginBottom: 4 },
+  locValue:               { fontSize: 15, color: "#f8fafc", fontWeight: "700", marginBottom: 4 },
+  locRadius:              { fontSize: 12, color: "#4b5563" },
+  presets:                { gap: 10, marginBottom: 24 },
+  presetBtn:              { backgroundColor: "#1a0a0a", borderRadius: 14, padding: 16, borderWidth: 1, borderColor: "#7f1d1d" },
+  presetDisabled:         { opacity: 0.5 },
+  presetLabel:            { fontSize: 15, fontWeight: "800", color: "#f8fafc", marginBottom: 4 },
+  presetMessage:          { fontSize: 12, color: "#6b7280" },
+  customBox:              { backgroundColor: "#111827", borderRadius: 14, padding: 16, marginBottom: 24, gap: 12 },
+  input:                  { color: "#f8fafc", fontSize: 15, lineHeight: 22, minHeight: 80 },
+  sendBtn:                { backgroundColor: "#dc2626", borderRadius: 12, paddingVertical: 16, alignItems: "center" },
+  sendBtnDisabled:        { backgroundColor: "#4b1414", opacity: 0.6 },
+  sendBtnText:            { color: "#fff", fontSize: 16, fontWeight: "800" },
+  logBox:                 { backgroundColor: "#111827", borderRadius: 14, overflow: "hidden" },
+  logRow:                 { flexDirection: "row", justifyContent: "space-between", padding: 14, borderBottomWidth: 1, borderBottomColor: "#1f2937" },
+  logLeft:                { flex: 1, marginRight: 12 },
+  logMessage:             { fontSize: 13, color: "#f8fafc", fontWeight: "600", marginBottom: 2 },
+  logId:                  { fontSize: 10, color: "#374151" },
+  logRight:               { alignItems: "flex-end" },
+  logTime:                { fontSize: 12, color: "#6b7280", marginBottom: 2 },
+  logDelivered:           { fontSize: 11, color: "#22c55e", fontWeight: "600" },
+  modalOverlay:           { flex: 1, backgroundColor: "rgba(0,0,0,0.7)", justifyContent: "flex-end" },
+  modalBox:               { backgroundColor: "#111827", borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24, paddingBottom: 40 },
+  modalTitle:             { fontSize: 14, color: "#6b7280", fontWeight: "800", letterSpacing: 1, marginBottom: 16, textTransform: "uppercase" },
+  modalOption:            { paddingVertical: 16, paddingHorizontal: 12, borderRadius: 10, marginBottom: 4 },
+  modalOptionActive:      { backgroundColor: "#1f2937" },
+  modalOptionText:        { fontSize: 15, color: "#9ca3af", fontWeight: "600" },
+  modalOptionTextActive:  { color: "#f8fafc", fontWeight: "800" },
+  modalCancel:            { marginTop: 8, paddingVertical: 16, alignItems: "center" },
+  modalCancelText:        { fontSize: 15, color: "#ef4444", fontWeight: "700" },
 });
-

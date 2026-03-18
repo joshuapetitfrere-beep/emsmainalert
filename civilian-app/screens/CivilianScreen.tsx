@@ -1,10 +1,12 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   View, Text, StyleSheet, TouchableOpacity,
   Vibration, SafeAreaView,
 } from "react-native";
 import * as Location from "expo-location";
 import ActiveAlertsScreen from "./ActiveAlertsScreen";
+import Magnetometer from "expo-sensors"
+import {calcBearing, getRelativeDirection, getDirectionArrow} from "./directionUtils";
 
 const SERVER_WS = "wss://emsmainalert-production.up.railway.app/ws";
 
@@ -24,6 +26,10 @@ export default function CivilianScreen({ onExit }: Props) {
   const [locationStatus, setLocationStatus] = useState("Requesting...");
   const [alertCount, setAlertCount]         = useState(0);
   const [showAlerts, setShowAlerts]         = useState(false);
+  const [userHeading, setUserHeading] = useState<number>(0);
+  const [directionLabel, setDirectionLabel] = useState<string>("");
+  const [directionArrow, setDirectionArrow] = useState<string>("");
+  const emsPositionRef = useRef<{ lat: number; lon: number; prevLat: number | null; prevLon: number | null } | null>(null);
 
   const wsRef            = useRef<WebSocket | null>(null);
   const locationInterval = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -55,6 +61,23 @@ export default function CivilianScreen({ onExit }: Props) {
       reconnectTimeout.current = setTimeout(connectWebSocket, 5000);
     };
   }
+
+  useEffect(() => {
+  Magnetometer.setUpdateInterval(500);
+  const sub = Magnetometer.addListener(({ x, y }) => {
+    let angle = Math.atan2(y, x) * (180 / Math.PI);
+    if (angle < 0) angle += 360;
+    setUserHeading(angle);
+    // Recalculate direction whenever heading updates
+    const pos = emsPositionRef.current;
+    if (pos && pos.prevLat !== null && pos.prevLon !== null) {
+      const bearing = calcBearing(pos.prevLat, pos.prevLon, pos.lat, pos.lon);
+      setDirectionLabel(getRelativeDirection(bearing, angle));
+      setDirectionArrow(getDirectionArrow(bearing, angle));
+    }
+  });
+  return () => sub.remove();
+}, []);
 
   async function requestLocationPermission() {
     const { status } = await Location.requestForegroundPermissionsAsync();

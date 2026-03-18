@@ -47,7 +47,11 @@ async function reverseGeocode(lat: number, lon: number): Promise<string> {
 }
 
 function timeAgo(dateStr: string): string {
-  const diff = Math.floor((Date.now() - new Date(dateStr + "Z").getTime()) / 1000);
+  if (!dateStr) return "Unknown";
+  // Handle both "2026-03-16 11:56:05.304338" and ISO formats
+  const cleaned = dateStr.replace(" ", "T") + (dateStr.includes("Z") ? "" : "Z");
+  const diff = Math.floor((Date.now() - new Date(cleaned).getTime()) / 1000);
+  if (isNaN(diff) || diff < 0) return "Just now";
   if (diff < 60) return `${diff}s ago`;
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   return `${Math.floor(diff / 3600)}h ago`;

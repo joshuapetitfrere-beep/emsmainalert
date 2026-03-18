@@ -1,4 +1,5 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException
+from fastapi.responses import HTMLResponse
 from typing import List, Optional
 from math import radians, cos, sin, asin, sqrt
 from contextlib import asynccontextmanager
@@ -10,6 +11,43 @@ from datetime import datetime
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 db_pool = None
+
+# ── Polk County Hospital Geofences ────────────────────────────────────────────
+# Edit coordinates or radius_miles as needed.
+HOSPITALS = [
+    {"name": "Lakeland Regional Health",        "lat": 28.0627,  "lon": -81.9355, "radius_miles": 0.15},
+    {"name": "Bartow Regional Medical Center",  "lat": 27.8878,  "lon": -81.8190, "radius_miles": 0.15},
+    {"name": "Winter Haven Hospital",           "lat": 28.0222,  "lon": -81.7215, "radius_miles": 0.15},
+    {"name": "South Florida Baptist Hospital",  "lat": 28.0603,  "lon": -82.1307, "radius_miles": 0.15},
+    {"name": "AdventHealth Heart of Florida",   "lat": 28.1006,  "lon": -81.7787, "radius_miles": 0.15},
+    {"name": "AdventHealth Lake Wales",         "lat": 27.9014,  "lon": -81.5856, "radius_miles": 0.15},
+]
+
+# Average ambulance speed used for ETA estimation
+AVG_SPEED_MPH = 45
+
+
+def check_hospital_geofence(lat: float, lon: float) -> Optional[str]:
+    for h in HOSPITALS:
+        if distance_miles(lat, lon, h["lat"], h["lon"]) <= h["radius_miles"]:
+            return h["name"]
+    return None
+
+
+def get_hospital_coords(name: str) -> Optional[dict]:
+    for h in HOSPITALS:
+        if h["name"] == name:
+            return {"lat": h["lat"], "lon": h["lon"]}
+    return None
+
+
+def calc_eta_minutes(amb_lat: float, amb_lon: float, hospital_name: str) -> Optional[int]:
+    coords = get_hospital_coords(hospital_name)
+    if not coords:
+        return None
+    dist = distance_miles(amb_lat, amb_lon, coords["lat"], coords["lon"])
+    return max(1, round((dist / AVG_SPEED_MPH) * 60))
+
 
 async def init_db(pool):
     async with pool.acquire() as conn:
@@ -45,6 +83,7 @@ async def init_db(pool):
         """)
     print("[DB] Tables ready")
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global db_pool
@@ -58,12 +97,14 @@ async def lifespan(app: FastAPI):
     if db_pool:
         await db_pool.close()
 
-app = FastAPI(title="EMS Alert Server", version="4.2.0", lifespan=lifespan)
+
+app = FastAPI(title="EMS Alert Server", version="4.5.0", lifespan=lifespan)
 EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 
 # ── Cooldown ──────────────────────────────────────────────────────────────────
 cooldown_tracker: dict = {}
 COOLDOWN_SECONDS = 30
+
 
 def check_cooldown(unit_id: str) -> bool:
     last = cooldown_tracker.get(unit_id)
@@ -71,11 +112,51 @@ def check_cooldown(unit_id: str) -> bool:
         return True
     return (datetime.utcnow() - last).total_seconds() >= COOLDOWN_SECONDS
 
+
 def update_cooldown(unit_id: str):
     cooldown_tracker[unit_id] = datetime.utcnow()
 
-# ── Active alerts tracker ─────────────────────────────────────────────────────
+
+# ── Active alerts & dashboard clients ────────────────────────────────────────
 active_alerts: dict = {}
+dashboard_clients: List[WebSocket] = []
+
+
+async def push_dashboard_update():
+    if not dashboard_clients:
+        return
+    text = json.dumps(build_dashboard_payload())
+    for ws in dashboard_clients.copy():
+        try:
+            await ws.send_text(text)
+        except Exception:
+            if ws in dashboard_clients:
+                dashboard_clients.remove(ws)
+
+
+def build_dashboard_payload() -> dict:
+    units = []
+    for unit_id, alert in active_alerts.items():
+        eta = None
+        if alert.get("destination_hospital") and alert.get("lat") and alert.get("lon"):
+            eta = calc_eta_minutes(alert["lat"], alert["lon"], alert["destination_hospital"])
+        units.append({
+            "unit_id": unit_id,
+            "alert_id": alert.get("alert_id"),
+            "alert_type": alert.get("alert_type", "Unknown"),
+            "destination_hospital": alert.get("destination_hospital", "Unknown"),
+            "num_patients": alert.get("num_patients", 1),
+            "eta_minutes": eta,
+            "activated_at": alert.get("activated_at"),
+            "lat": alert.get("lat"),
+            "lon": alert.get("lon"),
+        })
+    return {
+        "type": "dashboard_update",
+        "units": units,
+        "hospitals": [h["name"] for h in HOSPITALS],
+    }
+
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 def load_api_keys() -> dict:
@@ -88,23 +169,27 @@ def load_api_keys() -> dict:
             keys[key.strip()] = unit_id.strip()
     return keys
 
+
 def validate_api_key(api_key: str) -> str:
     keys = load_api_keys()
     if api_key not in keys:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
     return keys[api_key]
 
+
 # ── Haversine ─────────────────────────────────────────────────────────────────
 def distance_miles(lat1, lon1, lat2, lon2):
     lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
     dlon = lon2 - lon1
     dlat = lat2 - lat1
-    a = sin(dlat/2)**2 + cos(lat1)*cos(lat2)*sin(dlon/2)**2
+    a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
     c = 2 * asin(sqrt(a))
     return 3956 * c
 
+
 def make_alert_id(unit_id: str) -> str:
     return f"alert_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{unit_id}"
+
 
 def parse_ts_from_id(alert_id: str) -> Optional[str]:
     try:
@@ -112,6 +197,7 @@ def parse_ts_from_id(alert_id: str) -> Optional[str]:
         return f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}T{ts[8:10]}:{ts[10:12]}:{ts[12:14]}"
     except:
         return None
+
 
 # ── Client ────────────────────────────────────────────────────────────────────
 class Client:
@@ -123,6 +209,7 @@ class Client:
         self.push_token: Optional[str] = None
         self.is_ems: bool = False
         self.unit_id: Optional[str] = None
+
 
 # ── Connection Manager ────────────────────────────────────────────────────────
 class ConnectionManager:
@@ -143,8 +230,16 @@ class ConnectionManager:
             del active_alerts[client.unit_id]
         print(f"[DISCONNECT] Total: {len(self.active_clients)}")
 
-    async def broadcast_ems_position(self, unit_id, lat, lon, alert_id, radius_miles):
-        payload = json.dumps({"type": "ems_position", "unit_id": unit_id, "alert_id": alert_id, "lat": lat, "lon": lon})
+    async def broadcast_ems_position(self, unit_id, lat, lon, alert_id, radius_miles, prev_lat=None, prev_lon=None):
+        payload = json.dumps({
+            "type": "ems_position",
+            "unit_id": unit_id,
+            "alert_id": alert_id,
+            "lat": lat,
+            "lon": lon,
+            "prev_lat": prev_lat,
+            "prev_lon": prev_lon,
+        })
         for client in self.active_clients.copy():
             if client.is_ems:
                 continue
@@ -156,14 +251,46 @@ class ConnectionManager:
             except Exception as e:
                 print(f"[POS ERROR] {e}")
 
-    async def broadcast_alert(self, message, lat, lon, radius_miles=2.0, ems_unit_id="EMS"):
+    async def broadcast_clear(self, unit_id: str, reason: str = "manual"):
+        if unit_id in active_alerts:
+            del active_alerts[unit_id]
+        payload = json.dumps({"type": "ems_clear", "unit_id": unit_id, "reason": reason})
+        for c in self.active_clients.copy():
+            if not c.is_ems:
+                try:
+                    await c.websocket.send_text(payload)
+                except Exception as e:
+                    print(f"[CLEAR ERROR] {e}")
+        print(f"[CLEAR] Unit {unit_id} — reason: {reason}")
+        await push_dashboard_update()
+
+    async def broadcast_alert(self, message, lat, lon, radius_miles=2.0, ems_unit_id="EMS",
+                               destination_hospital=None, num_patients=1, alert_type="Medical"):
         alert_id = make_alert_id(ems_unit_id)
         now = datetime.utcnow()
-        payload = json.dumps({"type": "ems_alert", "alert_id": alert_id, "message": message, "ems_unit": ems_unit_id, "lat": lat, "lon": lon})
+        payload = json.dumps({
+            "type": "ems_alert",
+            "alert_id": alert_id,
+            "message": message,
+            "ems_unit": ems_unit_id,
+            "lat": lat,
+            "lon": lon,
+        })
         ws_sent = 0
         push_tokens = []
 
-        active_alerts[ems_unit_id] = {"alert_id": alert_id, "lat": lat, "lon": lon, "radius_miles": radius_miles}
+        active_alerts[ems_unit_id] = {
+            "alert_id": alert_id,
+            "lat": lat,
+            "lon": lon,
+            "prev_lat": None,
+            "prev_lon": None,
+            "radius_miles": radius_miles,
+            "destination_hospital": destination_hospital,
+            "num_patients": num_patients,
+            "alert_type": alert_type,
+            "activated_at": now.isoformat(),
+        }
 
         for client in self.active_clients.copy():
             try:
@@ -203,27 +330,73 @@ class ConnectionManager:
                     alert_id, ems_unit_id, message, lat, lon, radius_miles, now, ws_sent, push_sent
                 )
 
+        await push_dashboard_update()
         print(f"[ALERT] {alert_id} | WS: {ws_sent} | Push: {push_sent}")
-        return {"id": alert_id, "ems_unit": ems_unit_id, "message": message, "ws_sent": ws_sent, "push_sent": push_sent, "sent_at": now.isoformat()}
+        return {
+            "id": alert_id,
+            "ems_unit": ems_unit_id,
+            "message": message,
+            "ws_sent": ws_sent,
+            "push_sent": push_sent,
+            "sent_at": now.isoformat(),
+        }
 
     async def _send_expo_push(self, tokens, message, unit_id, alert_id, lat, lon):
         valid = [t for t in tokens if t.startswith("ExponentPushToken")]
         if not valid:
             return 0
-        messages = [{"to": t, "sound": "default", "title": "🚨 EMS VEHICLE APPROACHING", "body": message, "data": {"alert_id": alert_id, "ems_unit": unit_id, "lat": lat, "lon": lon}, "priority": "high", "ttl": 60} for t in valid]
+        messages = [
+            {
+                "to": t,
+                "sound": "default",
+                "title": "🚨 EMS VEHICLE APPROACHING",
+                "body": message,
+                "data": {"alert_id": alert_id, "ems_unit": unit_id, "lat": lat, "lon": lon},
+                "priority": "high",
+                "ttl": 60,
+            }
+            for t in valid
+        ]
         sent = 0
         async with httpx.AsyncClient() as client:
             for i in range(0, len(messages), 100):
                 try:
-                    resp = await client.post(EXPO_PUSH_URL, json=messages[i:i+100], headers={"Content-Type": "application/json"}, timeout=10.0)
+                    resp = await client.post(
+                        EXPO_PUSH_URL,
+                        json=messages[i:i + 100],
+                        headers={"Content-Type": "application/json"},
+                        timeout=10.0,
+                    )
                     sent += sum(1 for r in resp.json().get("data", []) if r.get("status") == "ok")
                 except Exception as e:
                     print(f"[PUSH ERROR] {e}")
         return sent
 
+
 manager = ConnectionManager()
 
-# ── WebSocket ─────────────────────────────────────────────────────────────────
+
+# ── Dashboard WebSocket ───────────────────────────────────────────────────────
+@app.websocket("/ws/dashboard")
+async def dashboard_ws(websocket: WebSocket):
+    await websocket.accept()
+    dashboard_clients.append(websocket)
+    print(f"[DASHBOARD] Connected. Total: {len(dashboard_clients)}")
+    try:
+        await websocket.send_text(json.dumps(build_dashboard_payload()))
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print(f"[DASHBOARD WS ERROR] {e}")
+    finally:
+        if websocket in dashboard_clients:
+            dashboard_clients.remove(websocket)
+        print(f"[DASHBOARD] Disconnected. Total: {len(dashboard_clients)}")
+
+
+# ── Main WebSocket ────────────────────────────────────────────────────────────
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     client = await manager.connect(websocket)
@@ -249,30 +422,50 @@ async def websocket_endpoint(websocket: WebSocket):
                 print(f"[EMS] Unit registered: {client.unit_id}")
 
             elif msg_type == "ems_position":
-                unit_id  = data.get("unit_id")
-                lat      = data.get("lat")
-                lon      = data.get("lon")
+                unit_id = data.get("unit_id")
+                lat = data.get("lat")
+                lon = data.get("lon")
                 alert_id = data.get("alert_id")
                 if unit_id and lat and lon and alert_id:
                     if unit_id in active_alerts:
+                        prev_lat = active_alerts[unit_id].get("lat")
+                        prev_lon = active_alerts[unit_id].get("lon")
+                        active_alerts[unit_id]["prev_lat"] = prev_lat
+                        active_alerts[unit_id]["prev_lon"] = prev_lon
                         active_alerts[unit_id]["lat"] = lat
                         active_alerts[unit_id]["lon"] = lon
                         radius = active_alerts[unit_id]["radius_miles"]
                     else:
+                        prev_lat, prev_lon = None, None
                         radius = 2.0
-                    await manager.broadcast_ems_position(unit_id, lat, lon, alert_id, radius)
+
+                    hospital = check_hospital_geofence(lat, lon)
+                    if hospital and unit_id in active_alerts:
+                        print(f"[GEOFENCE] {unit_id} entered {hospital} — auto-clearing")
+                        await manager.broadcast_clear(unit_id, reason=f"arrived:{hospital}")
+                    else:
+                        await manager.broadcast_ems_position(unit_id, lat, lon, alert_id, radius, prev_lat, prev_lon)
+                        await push_dashboard_update()
+
+            elif msg_type == "ems_status":
+                unit_id = data.get("unit_id")
+                status = data.get("status", "").lower()
+                print(f"[STATUS] {unit_id} → {status}")
+                if status == "arrived" and unit_id and unit_id in active_alerts:
+                    await manager.broadcast_clear(unit_id, reason="arrived:status_change")
+                try:
+                    await client.websocket.send_text(json.dumps({
+                        "type": "status_ack",
+                        "unit_id": unit_id,
+                        "status": status,
+                    }))
+                except:
+                    pass
 
             elif msg_type == "ems_clear":
                 unit_id = data.get("unit_id")
-                if unit_id and unit_id in active_alerts:
-                    del active_alerts[unit_id]
-                    payload = json.dumps({"type": "ems_clear", "unit_id": unit_id})
-                    for c in manager.active_clients:
-                        if not c.is_ems:
-                            try:
-                                await c.websocket.send_text(payload)
-                            except:
-                                pass
+                if unit_id:
+                    await manager.broadcast_clear(unit_id, reason="manual")
 
             elif msg_type == "register_token":
                 token = data.get("token")
@@ -305,33 +498,66 @@ async def websocket_endpoint(websocket: WebSocket):
         print(f"[WS ERROR] {e}")
         manager.disconnect(client)
 
+
 # ── HTTP Endpoints ────────────────────────────────────────────────────────────
 @app.post("/trigger-alert")
 async def trigger_alert(
-    lat: float         = Query(...),
-    lon: float         = Query(...),
+    lat: float = Query(...),
+    lon: float = Query(...),
     alert_message: str = Query("Emergency Vehicle Approaching"),
-    radius: float      = Query(2.0),
-    ems_unit_id: str   = Query("EMS-1"),
-    api_key: str       = Query(...),
+    radius: float = Query(2.0),
+    ems_unit_id: str = Query("EMS-1"),
+    api_key: str = Query(...),
+    destination_hospital: str = Query(None),
+    num_patients: int = Query(1),
+    alert_type: str = Query("Medical"),
 ):
     validate_api_key(api_key)
     if not check_cooldown(ems_unit_id):
         seconds_left = int(COOLDOWN_SECONDS - (datetime.utcnow() - cooldown_tracker[ems_unit_id]).total_seconds())
         raise HTTPException(status_code=429, detail=f"Cooldown active. Wait {seconds_left} seconds.")
     update_cooldown(ems_unit_id)
-    entry = await manager.broadcast_alert(message=alert_message, lat=lat, lon=lon, radius_miles=radius, ems_unit_id=ems_unit_id)
-    return {"status": "Alert sent", "alert_id": entry["id"], "message": alert_message, "radius_miles": radius, "ws_delivered": entry["ws_sent"], "push_delivered": entry["push_sent"]}
+    entry = await manager.broadcast_alert(
+        message=alert_message,
+        lat=lat,
+        lon=lon,
+        radius_miles=radius,
+        ems_unit_id=ems_unit_id,
+        destination_hospital=destination_hospital,
+        num_patients=num_patients,
+        alert_type=alert_type,
+    )
+    return {
+        "status": "Alert sent",
+        "alert_id": entry["id"],
+        "message": alert_message,
+        "radius_miles": radius,
+        "ws_delivered": entry["ws_sent"],
+        "push_delivered": entry["push_sent"],
+    }
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def serve_dashboard():
+    try:
+        with open("dashboard.html", "r") as f:
+            return HTMLResponse(content=f.read())
+    except FileNotFoundError:
+        return HTMLResponse(
+            content="<h1>dashboard.html not found. Deploy it alongside main.py.</h1>",
+            status_code=404
+        )
+
 
 @app.get("/status")
 async def status():
     device_count = 0
-    alert_count  = 0
-    last_alert   = None
+    alert_count = 0
+    last_alert = None
     if db_pool:
         async with db_pool.acquire() as conn:
             device_count = await conn.fetchval("SELECT COUNT(*) FROM devices")
-            alert_count  = await conn.fetchval("SELECT COUNT(*) FROM alerts")
+            alert_count = await conn.fetchval("SELECT COUNT(*) FROM alerts")
             row = await conn.fetchrow("SELECT * FROM alerts ORDER BY sent_at DESC NULLS LAST LIMIT 1")
             if row:
                 d = dict(row)
@@ -339,11 +565,13 @@ async def status():
                 last_alert = d
     return {
         "connected_clients": len(manager.active_clients),
+        "dashboard_clients": len(dashboard_clients),
         "registered_devices": device_count,
         "total_alerts_sent": alert_count,
         "active_responses": len(active_alerts),
         "last_alert": last_alert,
     }
+
 
 @app.get("/alerts")
 async def get_alerts():
@@ -361,9 +589,11 @@ async def get_alerts():
             return {"alerts": alerts}
     return {"alerts": []}
 
+
 @app.get("/active")
 async def get_active():
     return {"active_responses": active_alerts}
+
 
 @app.get("/devices")
 async def get_devices():
@@ -372,3 +602,8 @@ async def get_devices():
             rows = await conn.fetch("SELECT token, lat, lon, last_seen FROM devices ORDER BY last_seen DESC")
             return {"devices": [dict(r) for r in rows]}
     return {"devices": []}
+
+
+@app.get("/hospitals")
+async def get_hospitals():
+    return {"hospitals": HOSPITALS}
