@@ -13,7 +13,6 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 db_pool = None
 
 # ── Polk County Hospital Geofences ────────────────────────────────────────────
-# Edit coordinates or radius_miles as needed.
 HOSPITALS = [
     {"name": "Lakeland Regional Health",        "lat": 28.0627,  "lon": -81.9355, "radius_miles": 0.15},
     {"name": "Bartow Regional Medical Center",  "lat": 27.8878,  "lon": -81.8190, "radius_miles": 0.15},
@@ -23,7 +22,6 @@ HOSPITALS = [
     {"name": "AdventHealth Lake Wales",         "lat": 27.9014,  "lon": -81.5856, "radius_miles": 0.15},
 ]
 
-# Average ambulance speed used for ETA estimation
 AVG_SPEED_MPH = 45
 
 
@@ -98,7 +96,7 @@ async def lifespan(app: FastAPI):
         await db_pool.close()
 
 
-app = FastAPI(title="EMS Alert Server", version="4.5.0", lifespan=lifespan)
+app = FastAPI(title="EMS Alert Server", version="4.6.0", lifespan=lifespan)
 EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 
 # ── Cooldown ──────────────────────────────────────────────────────────────────
@@ -150,6 +148,8 @@ def build_dashboard_payload() -> dict:
             "activated_at": alert.get("activated_at"),
             "lat": alert.get("lat"),
             "lon": alert.get("lon"),
+            # Trauma fields — None if no trauma activated
+            "trauma": alert.get("trauma", None),
         })
     return {
         "type": "dashboard_update",
@@ -290,6 +290,7 @@ class ConnectionManager:
             "num_patients": num_patients,
             "alert_type": alert_type,
             "activated_at": now.isoformat(),
+            "trauma": None,
         }
 
         for client in self.active_clients.copy():
@@ -446,6 +447,41 @@ async def websocket_endpoint(websocket: WebSocket):
                     else:
                         await manager.broadcast_ems_position(unit_id, lat, lon, alert_id, radius, prev_lat, prev_lon)
                         await push_dashboard_update()
+
+            elif msg_type == "ems_trauma":
+                # ── Trauma activation ─────────────────────────────────────────
+                unit_id = data.get("unit_id")
+                if unit_id and unit_id in active_alerts:
+                    lat = active_alerts[unit_id].get("lat")
+                    lon = active_alerts[unit_id].get("lon")
+                    hospital = active_alerts[unit_id].get("destination_hospital")
+                    eta = calc_eta_minutes(lat, lon, hospital) if lat and lon and hospital else None
+
+                    trauma = {
+                        "mechanism": data.get("mechanism", "Unknown"),
+                        "num_patients": data.get("num_patients", active_alerts[unit_id].get("num_patients", 1)),
+                        "age": data.get("age", ""),
+                        "sex": data.get("sex", ""),
+                        "vitals": data.get("vitals", ""),
+                        "gcs": data.get("gcs", ""),
+                        "eta_minutes": eta,
+                        "activated_at": datetime.utcnow().isoformat(),
+                        "unit_id": unit_id,
+                        "destination_hospital": hospital,
+                    }
+                    active_alerts[unit_id]["trauma"] = trauma
+                    print(f"[TRAUMA] {unit_id} → {hospital} | Mech: {trauma['mechanism']} | ETA: {eta}min")
+                    await push_dashboard_update()
+
+                    # Ack back to EMS unit
+                    try:
+                        await client.websocket.send_text(json.dumps({
+                            "type": "trauma_ack",
+                            "unit_id": unit_id,
+                            "eta_minutes": eta,
+                        }))
+                    except:
+                        pass
 
             elif msg_type == "ems_status":
                 unit_id = data.get("unit_id")

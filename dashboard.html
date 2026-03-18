@@ -8,7 +8,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;600;700;800&display=swap" rel="stylesheet" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
- 
+
     :root {
       --bg:        #080b10;
       --surface:   #0d1117;
@@ -23,16 +23,9 @@
       --font-mono: 'IBM Plex Mono', monospace;
       --font-sans: 'IBM Plex Sans', sans-serif;
     }
- 
-    html, body {
-      height: 100%;
-      background: var(--bg);
-      color: var(--text);
-      font-family: var(--font-sans);
-      overflow-x: hidden;
-    }
- 
-    /* ── Scanline overlay ── */
+
+    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font-sans); overflow-x: hidden; }
+
     body::after {
       content: '';
       position: fixed;
@@ -41,8 +34,104 @@
       pointer-events: none;
       z-index: 9999;
     }
- 
-    /* ── Header ── */
+
+    /* ── Trauma Banner ───────────────────────────────────────────────────── */
+    #trauma-banner {
+      display: none;
+      position: sticky;
+      top: 0;
+      z-index: 200;
+      background: #450a0a;
+      border-bottom: 2px solid var(--red);
+      padding: 0 32px;
+      animation: traumaFlash 1s ease-in-out infinite;
+    }
+
+    #trauma-banner.visible { display: block; }
+
+    @keyframes traumaFlash {
+      0%, 100% { background: #450a0a; }
+      50%       { background: #7f1d1d; }
+    }
+
+    .trauma-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 0;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .trauma-left {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .trauma-icon { font-size: 28px; flex-shrink: 0; }
+
+    .trauma-title {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--red);
+      letter-spacing: 2px;
+      margin-bottom: 4px;
+    }
+
+    .trauma-fields {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin-top: 6px;
+    }
+
+    .trauma-field {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .trauma-field-label {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      color: #9b1c1c;
+      text-transform: uppercase;
+    }
+
+    .trauma-field-value {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      font-weight: 700;
+      color: #fca5a5;
+    }
+
+    .trauma-eta-value {
+      font-size: 20px;
+      color: #fff;
+    }
+
+    .trauma-dismiss {
+      background: rgba(0,0,0,0.3);
+      border: 1px solid #7f1d1d;
+      color: #fca5a5;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background 0.2s;
+    }
+
+    .trauma-dismiss:hover { background: rgba(0,0,0,0.5); }
+
+    /* ── Header ──────────────────────────────────────────────────────────── */
     .header {
       display: flex;
       align-items: center;
@@ -54,55 +143,19 @@
       top: 0;
       z-index: 100;
     }
- 
+
     .header-left { display: flex; align-items: center; gap: 16px; }
- 
-    .logo {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 3px;
-      color: var(--red);
-      text-transform: uppercase;
-    }
- 
-    .header-title {
-      font-size: 15px;
-      font-weight: 800;
-      color: var(--text);
-      letter-spacing: 0.3px;
-    }
- 
+    .logo { font-family: var(--font-mono); font-size: 11px; font-weight: 700; letter-spacing: 3px; color: var(--red); }
+    .header-title { font-size: 15px; font-weight: 800; color: var(--text); }
     .header-right { display: flex; align-items: center; gap: 20px; }
- 
-    .clock {
-      font-family: var(--font-mono);
-      font-size: 13px;
-      color: var(--dim);
-    }
- 
-    .conn-badge {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      font-family: var(--font-mono);
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--dim);
-    }
- 
-    .conn-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--muted);
-      transition: background 0.3s;
-    }
- 
+    .clock { font-family: var(--font-mono); font-size: 13px; color: var(--dim); }
+
+    .conn-badge { display: flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: var(--dim); }
+    .conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); transition: background 0.3s; }
     .conn-dot.live { background: var(--green); box-shadow: 0 0 8px var(--green); }
     .conn-dot.error { background: var(--red); }
- 
-    /* ── Filter bar ── */
+
+    /* ── Filter bar ──────────────────────────────────────────────────────── */
     .filter-bar {
       display: flex;
       align-items: center;
@@ -112,221 +165,92 @@
       background: var(--bg);
       flex-wrap: wrap;
     }
- 
-    .filter-label {
-      font-family: var(--font-mono);
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 2px;
-      color: var(--muted);
-      margin-right: 4px;
-    }
- 
-    .filter-btn {
-      padding: 6px 14px;
-      border-radius: 6px;
-      border: 1px solid var(--border);
-      background: transparent;
-      color: var(--dim);
-      font-family: var(--font-sans);
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.15s;
-      white-space: nowrap;
-    }
- 
+
+    .filter-label { font-family: var(--font-mono); font-size: 10px; font-weight: 700; letter-spacing: 2px; color: var(--muted); margin-right: 4px; }
+    .filter-btn { padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--dim); font-family: var(--font-sans); font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
     .filter-btn:hover { border-color: var(--muted); color: var(--text); }
- 
-    .filter-btn.active {
-      background: rgba(59,130,246,0.15);
-      border-color: var(--blue);
-      color: var(--blue);
-    }
- 
-    /* ── Main content ── */
-    .main {
-      padding: 32px;
-      max-width: 1200px;
-      margin: 0 auto;
-    }
- 
-    /* ── Empty state ── */
-    .empty {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 100px 32px;
-      text-align: center;
-    }
- 
-    .empty-icon {
-      font-size: 48px;
-      margin-bottom: 20px;
-      opacity: 0.3;
-    }
- 
-    .empty-title {
-      font-family: var(--font-mono);
-      font-size: 13px;
-      font-weight: 700;
-      letter-spacing: 2px;
-      color: var(--muted);
-      text-transform: uppercase;
-      margin-bottom: 8px;
-    }
- 
-    .empty-sub {
-      font-size: 13px;
-      color: var(--muted);
-    }
- 
-    /* ── Cards grid ── */
-    .cards {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-      gap: 20px;
-    }
- 
-    /* ── Unit card ── */
-    .card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      overflow: hidden;
-      animation: slideIn 0.3s ease;
-      position: relative;
-    }
- 
-    @keyframes slideIn {
-      from { opacity: 0; transform: translateY(12px); }
-      to   { opacity: 1; transform: translateY(0); }
-    }
- 
-    .card-accent {
-      height: 3px;
-      width: 100%;
-    }
- 
+    .filter-btn.active { background: rgba(59,130,246,0.15); border-color: var(--blue); color: var(--blue); }
+
+    /* ── Summary ─────────────────────────────────────────────────────────── */
+    .summary { display: flex; gap: 24px; padding: 12px 32px; border-bottom: 1px solid var(--border); background: var(--surface); }
+    .summary-item { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 11px; }
+    .summary-count { font-size: 18px; font-weight: 700; color: var(--text); }
+    .summary-desc { color: var(--muted); letter-spacing: 1px; }
+
+    /* ── Main ────────────────────────────────────────────────────────────── */
+    .main { padding: 32px; max-width: 1200px; margin: 0 auto; }
+
+    .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 100px 32px; text-align: center; }
+    .empty-icon { font-size: 48px; margin-bottom: 20px; opacity: 0.3; }
+    .empty-title { font-family: var(--font-mono); font-size: 13px; font-weight: 700; letter-spacing: 2px; color: var(--muted); margin-bottom: 8px; }
+    .empty-sub { font-size: 13px; color: var(--muted); }
+
+    /* ── Cards ───────────────────────────────────────────────────────────── */
+    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 20px; }
+
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; animation: slideIn 0.3s ease; }
+    .card.has-trauma { border-color: #7f1d1d; }
+
+    @keyframes slideIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+
+    .card-accent { height: 3px; width: 100%; }
     .card-body { padding: 20px; }
- 
-    .card-top {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      margin-bottom: 16px;
-    }
- 
-    .unit-id {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 2px;
-      color: var(--dim);
-      text-transform: uppercase;
-    }
- 
-    .alert-type-badge {
-      padding: 3px 10px;
-      border-radius: 4px;
-      font-family: var(--font-mono);
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-    }
- 
-    .card-hospital {
-      font-size: 18px;
-      font-weight: 800;
-      color: var(--text);
-      margin-bottom: 16px;
-      line-height: 1.3;
-    }
- 
-    .card-stats {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 10px;
-      margin-bottom: 16px;
-    }
- 
-    .stat {
-      background: rgba(255,255,255,0.03);
-      border: 1px solid var(--border);
+    .card-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
+    .unit-id { font-family: var(--font-mono); font-size: 11px; font-weight: 700; letter-spacing: 2px; color: var(--dim); }
+
+    .badge-row { display: flex; gap: 6px; align-items: center; }
+
+    .alert-type-badge { padding: 3px 10px; border-radius: 4px; font-family: var(--font-mono); font-size: 10px; font-weight: 700; letter-spacing: 1px; }
+    .trauma-badge { padding: 3px 10px; border-radius: 4px; font-family: var(--font-mono); font-size: 10px; font-weight: 700; letter-spacing: 1px; background: rgba(239,68,68,0.2); color: #f87171; border: 1px solid #7f1d1d; animation: pulseBadge 1.2s ease-in-out infinite; }
+
+    @keyframes pulseBadge { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
+
+    .card-hospital { font-size: 18px; font-weight: 800; color: var(--text); margin-bottom: 16px; }
+    .card-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+    .stat { background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+    .stat-label { font-family: var(--font-mono); font-size: 9px; font-weight: 700; letter-spacing: 2px; color: var(--muted); margin-bottom: 6px; }
+    .stat-value { font-family: var(--font-mono); font-size: 22px; font-weight: 700; line-height: 1; }
+    .stat-unit { font-size: 11px; font-weight: 400; color: var(--dim); margin-left: 3px; }
+
+    .eta-critical { color: var(--red); animation: pulse 1s ease-in-out infinite; }
+    .eta-warn { color: var(--amber); }
+    .eta-ok { color: var(--green); }
+    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
+
+    /* Trauma detail strip on card */
+    .trauma-strip {
+      background: rgba(127,29,29,0.2);
+      border: 1px solid #7f1d1d;
       border-radius: 8px;
-      padding: 12px;
+      padding: 10px 12px;
+      margin-bottom: 14px;
     }
- 
-    .stat-label {
+
+    .trauma-strip-title {
       font-family: var(--font-mono);
       font-size: 9px;
       font-weight: 700;
       letter-spacing: 2px;
-      color: var(--muted);
-      text-transform: uppercase;
-      margin-bottom: 6px;
+      color: #9b1c1c;
+      margin-bottom: 8px;
     }
- 
-    .stat-value {
-      font-family: var(--font-mono);
-      font-size: 22px;
-      font-weight: 700;
-      line-height: 1;
+
+    .trauma-strip-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
     }
- 
-    .stat-unit {
-      font-size: 11px;
-      font-weight: 400;
-      color: var(--dim);
-      margin-left: 3px;
-    }
- 
-    /* ETA pulse when <= 5 min */
-    .eta-critical { color: var(--red); animation: pulse 1s ease-in-out infinite; }
-    .eta-warn     { color: var(--amber); }
-    .eta-ok       { color: var(--green); }
- 
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50%       { opacity: 0.5; }
-    }
- 
-    .card-footer {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding-top: 12px;
-      border-top: 1px solid var(--border);
-    }
- 
-    .activated-label {
-      font-family: var(--font-mono);
-      font-size: 10px;
-      color: var(--muted);
-    }
- 
-    .live-badge {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      font-family: var(--font-mono);
-      font-size: 10px;
-      font-weight: 700;
-      color: var(--green);
-      letter-spacing: 1px;
-    }
- 
-    .live-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: var(--green);
-      animation: pulse 1.2s ease-in-out infinite;
-    }
- 
-    /* Alert type colors */
+
+    .trauma-strip-item { display: flex; flex-direction: column; gap: 1px; }
+    .trauma-strip-label { font-family: var(--font-mono); font-size: 8px; letter-spacing: 1px; color: #9b1c1c; }
+    .trauma-strip-value { font-family: var(--font-mono); font-size: 11px; color: #fca5a5; font-weight: 600; }
+
+    .card-footer { display: flex; justify-content: space-between; align-items: center; padding-top: 12px; border-top: 1px solid var(--border); }
+    .activated-label { font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
+    .live-badge { display: flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 10px; font-weight: 700; color: var(--green); letter-spacing: 1px; }
+    .live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse 1.2s ease-in-out infinite; }
+
+    /* Type colors */
     .type-Medical  { background: rgba(59,130,246,0.15);  color: #60a5fa; }
     .type-Trauma   { background: rgba(239,68,68,0.15);   color: #f87171; }
     .type-Cardiac  { background: rgba(239,68,68,0.2);    color: #fca5a5; }
@@ -334,7 +258,6 @@
     .type-Fire     { background: rgba(249,115,22,0.15);  color: #fb923c; }
     .type-Police   { background: rgba(99,102,241,0.15);  color: #a5b4fc; }
     .type-Other    { background: rgba(100,116,139,0.15); color: #94a3b8; }
- 
     .accent-Medical  { background: #3b82f6; }
     .accent-Trauma   { background: #ef4444; }
     .accent-Cardiac  { background: #ef4444; }
@@ -342,48 +265,35 @@
     .accent-Fire     { background: #f97316; }
     .accent-Police   { background: #6366f1; }
     .accent-Other    { background: #64748b; }
- 
-    /* ── Summary bar ── */
-    .summary {
-      display: flex;
-      gap: 24px;
-      padding: 12px 32px;
-      border-bottom: 1px solid var(--border);
-      background: var(--surface);
-    }
- 
-    .summary-item {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-family: var(--font-mono);
-      font-size: 11px;
-    }
- 
-    .summary-count {
-      font-size: 18px;
-      font-weight: 700;
-      color: var(--text);
-    }
- 
-    .summary-desc { color: var(--muted); letter-spacing: 1px; }
- 
-    /* ── Responsive ── */
+
     @media (max-width: 600px) {
-      .header { padding: 14px 16px; }
-      .filter-bar { padding: 12px 16px; }
-      .main { padding: 16px; }
-      .summary { padding: 10px 16px; gap: 16px; }
+      .header, .filter-bar, .main, .summary { padding-left: 16px; padding-right: 16px; }
       .cards { grid-template-columns: 1fr; }
+      #trauma-banner { padding: 0 16px; }
+      .trauma-fields { gap: 10px; }
     }
   </style>
 </head>
 <body>
- 
+
+  <!-- Trauma Banner -->
+  <div id="trauma-banner">
+    <div class="trauma-inner">
+      <div class="trauma-left">
+        <div class="trauma-icon">🚨</div>
+        <div>
+          <div class="trauma-title">TRAUMA ACTIVATION</div>
+          <div class="trauma-fields" id="trauma-fields"></div>
+        </div>
+      </div>
+      <button class="trauma-dismiss" onclick="dismissTrauma()">✕ DISMISS</button>
+    </div>
+  </div>
+
   <!-- Header -->
   <header class="header">
     <div class="header-left">
-      <span class="logo">EMS Alert</span>
+      <span class="logo">EMS ALERT</span>
       <span class="header-title">Hospital Dashboard — Polk County</span>
     </div>
     <div class="header-right">
@@ -394,8 +304,8 @@
       </div>
     </div>
   </header>
- 
-  <!-- Summary bar -->
+
+  <!-- Summary -->
   <div class="summary" id="summary" style="display:none;">
     <div class="summary-item">
       <span class="summary-count" id="count-incoming">0</span>
@@ -406,13 +316,13 @@
       <span class="summary-desc">TOTAL PATIENTS</span>
     </div>
   </div>
- 
+
   <!-- Filter bar -->
   <div class="filter-bar" id="filter-bar">
     <span class="filter-label">Filter</span>
     <button class="filter-btn active" data-hospital="ALL" onclick="setFilter('ALL')">All Hospitals</button>
   </div>
- 
+
   <!-- Main -->
   <main class="main">
     <div id="empty" class="empty">
@@ -422,64 +332,113 @@
     </div>
     <div class="cards" id="cards" style="display:none;"></div>
   </main>
- 
+
   <script>
-    // ── State ──────────────────────────────────────────────────────────────
     let units = [];
     let hospitals = [];
     let activeFilter = 'ALL';
     let ws = null;
     let reconnectTimer = null;
- 
+    let traumaDismissed = false;   // reset when new trauma comes in
+    let lastTraumaId = null;       // track by unit_id so re-activate re-shows
+
     // ── Clock ──────────────────────────────────────────────────────────────
-    function updateClock() {
-      document.getElementById('clock').textContent = new Date().toLocaleTimeString('en-US', { hour12: false });
-    }
-    setInterval(updateClock, 1000);
-    updateClock();
- 
+    setInterval(() => {
+      document.getElementById('clock').textContent =
+        new Date().toLocaleTimeString('en-US', { hour12: false });
+    }, 1000);
+
     // ── WebSocket ──────────────────────────────────────────────────────────
     const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/dashboard';
- 
+
     function connect() {
       ws = new WebSocket(WS_URL);
- 
-      ws.onopen = () => {
-        setConn(true);
-        clearTimeout(reconnectTimer);
-      };
- 
+      ws.onopen = () => { setConn(true); clearTimeout(reconnectTimer); };
       ws.onmessage = (e) => {
         try {
           const data = JSON.parse(e.data);
           if (data.type === 'dashboard_update') {
             units = data.units || [];
             if (data.hospitals && data.hospitals.length) buildFilters(data.hospitals);
+            checkTraumaBanner();
             render();
           }
         } catch (err) {}
       };
- 
-      ws.onclose = () => {
-        setConn(false);
-        reconnectTimer = setTimeout(connect, 4000);
-      };
- 
+      ws.onclose = () => { setConn(false); reconnectTimer = setTimeout(connect, 4000); };
       ws.onerror = () => ws.close();
     }
- 
+
     function setConn(live) {
-      const dot = document.getElementById('conn-dot');
-      const lbl = document.getElementById('conn-label');
-      dot.className = 'conn-dot ' + (live ? 'live' : 'error');
-      lbl.textContent = live ? 'Live' : 'Reconnecting...';
+      document.getElementById('conn-dot').className = 'conn-dot ' + (live ? 'live' : 'error');
+      document.getElementById('conn-label').textContent = live ? 'Live' : 'Reconnecting...';
     }
- 
+
+    // ── Trauma Banner ──────────────────────────────────────────────────────
+    function checkTraumaBanner() {
+      // Find trauma units relevant to current filter
+      const relevant = units.filter(u => {
+        if (!u.trauma) return false;
+        if (activeFilter !== 'ALL' && u.destination_hospital !== activeFilter) return false;
+        return true;
+      });
+
+      if (relevant.length === 0) {
+        hideBanner();
+        return;
+      }
+
+      // Use the most recently activated trauma
+      const latest = relevant.sort((a, b) =>
+        new Date(b.trauma.activated_at) - new Date(a.trauma.activated_at)
+      )[0];
+
+      // If it's a new trauma (different unit or re-activated), reset dismiss
+      const traumaKey = latest.unit_id + latest.trauma.activated_at;
+      if (traumaKey !== lastTraumaId) {
+        lastTraumaId = traumaKey;
+        traumaDismissed = false;
+      }
+
+      if (!traumaDismissed) showBanner(latest);
+    }
+
+    function showBanner(unit) {
+      const t = unit.trauma;
+      const fields = [
+        { label: 'UNIT',      value: unit.unit_id },
+        { label: 'ETA',       value: t.eta_minutes != null ? t.eta_minutes + ' min' : '--', highlight: true },
+        { label: 'MECHANISM', value: t.mechanism || '--' },
+        { label: 'PATIENTS',  value: t.num_patients || 1 },
+        { label: 'AGE / SEX', value: [t.age, t.sex].filter(Boolean).join(' / ') || '--' },
+        { label: 'VITALS',    value: t.vitals || '--' },
+        { label: 'GCS',       value: t.gcs || '--' },
+        { label: 'HOSPITAL',  value: t.destination_hospital || '--' },
+      ];
+
+      document.getElementById('trauma-fields').innerHTML = fields.map(f => `
+        <div class="trauma-field">
+          <span class="trauma-field-label">${escHtml(f.label)}</span>
+          <span class="trauma-field-value ${f.highlight ? 'trauma-eta-value' : ''}">${escHtml(String(f.value))}</span>
+        </div>
+      `).join('');
+
+      document.getElementById('trauma-banner').classList.add('visible');
+    }
+
+    function hideBanner() {
+      document.getElementById('trauma-banner').classList.remove('visible');
+    }
+
+    function dismissTrauma() {
+      traumaDismissed = true;
+      hideBanner();
+    }
+
     // ── Filters ────────────────────────────────────────────────────────────
     function buildFilters(list) {
       hospitals = list;
       const bar = document.getElementById('filter-bar');
-      // Remove old hospital buttons (keep label + ALL)
       bar.querySelectorAll('[data-hospital]:not([data-hospital="ALL"])').forEach(b => b.remove());
       list.forEach(h => {
         const btn = document.createElement('button');
@@ -490,118 +449,124 @@
         bar.appendChild(btn);
       });
     }
- 
+
     function setFilter(h) {
       activeFilter = h;
-      document.querySelectorAll('.filter-btn').forEach(b => {
-        b.classList.toggle('active', b.dataset.hospital === h);
-      });
+      document.querySelectorAll('.filter-btn').forEach(b => b.classList.toggle('active', b.dataset.hospital === h));
+      checkTraumaBanner();
       render();
     }
- 
-    // ── ETA helpers ────────────────────────────────────────────────────────
+
+    // ── Helpers ────────────────────────────────────────────────────────────
     function etaClass(min) {
-      if (min === null || min === undefined) return '';
+      if (min == null) return '';
       if (min <= 5) return 'eta-critical';
       if (min <= 10) return 'eta-warn';
       return 'eta-ok';
     }
- 
-    function formatActivated(iso) {
+
+    function formatTime(iso) {
       if (!iso) return '--';
-      try {
-        const d = new Date(iso + 'Z');
-        return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
-      } catch { return '--'; }
+      try { return new Date(iso + 'Z').toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }); }
+      catch { return '--'; }
     }
- 
+
+    function escHtml(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
     // ── Render ─────────────────────────────────────────────────────────────
     function render() {
-      const filtered = activeFilter === 'ALL'
-        ? units
-        : units.filter(u => u.destination_hospital === activeFilter);
- 
-      const empty    = document.getElementById('empty');
-      const cards    = document.getElementById('cards');
-      const summary  = document.getElementById('summary');
- 
+      const filtered = activeFilter === 'ALL' ? units : units.filter(u => u.destination_hospital === activeFilter);
+      const empty = document.getElementById('empty');
+      const cards = document.getElementById('cards');
+      const summary = document.getElementById('summary');
+
       if (filtered.length === 0) {
         empty.style.display = 'flex';
         cards.style.display = 'none';
         summary.style.display = 'none';
         return;
       }
- 
+
       empty.style.display = 'none';
       cards.style.display = 'grid';
       summary.style.display = 'flex';
- 
-      // Summary counts
-      const totalPatients = filtered.reduce((s, u) => s + (u.num_patients || 1), 0);
+
       document.getElementById('count-incoming').textContent = filtered.length;
-      document.getElementById('count-patients').textContent = totalPatients;
- 
-      // Sort by ETA ascending (nulls last)
+      document.getElementById('count-patients').textContent = filtered.reduce((s, u) => s + (u.num_patients || 1), 0);
+
       filtered.sort((a, b) => {
-        if (a.eta_minutes === null) return 1;
-        if (b.eta_minutes === null) return -1;
+        if (a.eta_minutes == null) return 1;
+        if (b.eta_minutes == null) return -1;
         return a.eta_minutes - b.eta_minutes;
       });
- 
+
       cards.innerHTML = filtered.map(u => {
         const type    = u.alert_type || 'Other';
         const eta     = u.eta_minutes;
         const etaCls  = etaClass(eta);
-        const etaText = eta !== null && eta !== undefined ? eta : '--';
-        const hosp    = u.destination_hospital || 'Unknown';
+        const etaTxt  = eta != null ? eta : '--';
         const pts     = u.num_patients || 1;
-        const actTime = formatActivated(u.activated_at);
- 
+        const hasT    = !!u.trauma;
+
+        const traumaStrip = hasT ? `
+          <div class="trauma-strip">
+            <div class="trauma-strip-title">🚨 TRAUMA ACTIVATED</div>
+            <div class="trauma-strip-grid">
+              <div class="trauma-strip-item">
+                <span class="trauma-strip-label">MECHANISM</span>
+                <span class="trauma-strip-value">${escHtml(u.trauma.mechanism || '--')}</span>
+              </div>
+              <div class="trauma-strip-item">
+                <span class="trauma-strip-label">AGE / SEX</span>
+                <span class="trauma-strip-value">${escHtml([u.trauma.age, u.trauma.sex].filter(Boolean).join(' / ') || '--')}</span>
+              </div>
+              <div class="trauma-strip-item">
+                <span class="trauma-strip-label">VITALS</span>
+                <span class="trauma-strip-value">${escHtml(u.trauma.vitals || '--')}</span>
+              </div>
+              <div class="trauma-strip-item">
+                <span class="trauma-strip-label">GCS</span>
+                <span class="trauma-strip-value">${escHtml(u.trauma.gcs || '--')}</span>
+              </div>
+            </div>
+          </div>` : '';
+
         return `
-          <div class="card">
+          <div class="card ${hasT ? 'has-trauma' : ''}">
             <div class="card-accent accent-${type}"></div>
             <div class="card-body">
               <div class="card-top">
                 <span class="unit-id">${escHtml(u.unit_id)}</span>
-                <span class="alert-type-badge type-${type}">${escHtml(type)}</span>
+                <div class="badge-row">
+                  ${hasT ? '<span class="trauma-badge">TRAUMA</span>' : ''}
+                  <span class="alert-type-badge type-${type}">${escHtml(type)}</span>
+                </div>
               </div>
-              <div class="card-hospital">🏥 ${escHtml(hosp)}</div>
+              <div class="card-hospital">🏥 ${escHtml(u.destination_hospital || 'Unknown')}</div>
               <div class="card-stats">
                 <div class="stat">
                   <div class="stat-label">ETA</div>
-                  <div class="stat-value ${etaCls}">
-                    ${etaText}<span class="stat-unit">${eta !== null ? 'min' : ''}</span>
-                  </div>
+                  <div class="stat-value ${etaCls}">${etaTxt}<span class="stat-unit">${eta != null ? 'min' : ''}</span></div>
                 </div>
                 <div class="stat">
                   <div class="stat-label">Patients</div>
-                  <div class="stat-value" style="color:var(--text)">
-                    ${pts}<span class="stat-unit">${pts === 1 ? 'pt' : 'pts'}</span>
-                  </div>
+                  <div class="stat-value" style="color:var(--text)">${pts}<span class="stat-unit">${pts === 1 ? 'pt' : 'pts'}</span></div>
                 </div>
               </div>
+              ${traumaStrip}
               <div class="card-footer">
-                <span class="activated-label">Activated ${actTime}</span>
+                <span class="activated-label">Activated ${formatTime(u.activated_at)}</span>
                 <div class="live-badge"><div class="live-dot"></div>LIVE</div>
               </div>
             </div>
-          </div>
-        `;
+          </div>`;
       }).join('');
     }
- 
-    function escHtml(str) {
-      return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-    }
- 
-    // ── Init ───────────────────────────────────────────────────────────────
+
     connect();
     render();
   </script>
 </body>
 </html>
- 
