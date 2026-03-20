@@ -4,6 +4,7 @@ from math import radians, cos, sin, asin, sqrt
 import json
 import httpx
 from datetime import datetime
+import os
 
 
 app = FastAPI(title="EMS Alert Server", version="2.0.0")
