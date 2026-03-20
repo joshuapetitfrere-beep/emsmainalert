@@ -5,8 +5,19 @@ import json
 import httpx
 from datetime import datetime
 
+
 app = FastAPI(title="EMS Alert Server", version="2.0.0")
 EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
+
+def load_api_keys() -> dict:
+    raw = os.environ.get("EMS_API_KEYS", "")
+    keys = {}
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if ":" in entry:
+            unit_id, key = entry.split(":", 1)
+            keys[key.strip()] = unit_id.strip()
+    return keys
 
 def distance_miles(lat1, lon1, lat2, lon2):
     lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
@@ -142,6 +153,14 @@ async def trigger_alert(
 ):
     entry = await manager.broadcast_alert(message=alert_message, lat=lat, lon=lon, radius_miles=radius, ems_unit_id=ems_unit_id)
     return {"status": "Alert sent", "alert_id": entry["id"], "message": alert_message, "radius_miles": radius, "ws_delivered": entry["ws_sent"], "push_delivered": entry["push_sent"]}
+
+@app.get("/validate-key")
+async def validate_key(api_key: str = Query(...)):
+    keys = load_api_keys()
+    if api_key in keys:
+        return {"valid": True, "unit_id": keys[api_key]}
+    return {"valid": False}
+
 
 @app.get("/status")
 async def status():
