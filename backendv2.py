@@ -620,6 +620,8 @@ async def trigger_alert(
     }
 
 
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 async def serve_dashboard():
     try:
@@ -690,3 +692,10 @@ async def get_devices():
 @app.get("/hospitals")
 async def get_hospitals():
     return {"hospitals": HOSPITALS}
+
+@app.get("/validate-key")
+async def validate_key(api_key: str = Query(...)):
+    keys = load_api_keys()
+    if api_key in keys:
+        return {"valid": True, "unit_id": keys[api_key]}
+    return {"valid": False}
