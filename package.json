@@ -20,6 +20,11 @@
   "homepage": "https://github.com/joshuapetitfrere-beep/emsmainalert#readme",
   "dependencies": {
     "expo": "^54.0.0",
-    "expo-sensors": "~15.0.8"
+    "expo-sensors": "~15.0.8",
+    "react-native": "0.74.7"
+  },
+  "devDependencies": {
+    "@types/react": "~19.1.10",
+    "typescript": "~5.3.3"
   }
 }
