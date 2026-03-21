@@ -170,3 +170,10 @@ async def status():
 @app.get("/alerts")
 async def get_alerts():
     return {"alerts": alert_log[-20:]}
+
+@app.get("/validate-key")
+async def validate_key(api_key: str = Query(...)):
+    keys = load_api_keys()
+    if api_key in keys:
+        return {"valid": True, "unit_id": keys[api_key]}
+    return {"valid": False}
