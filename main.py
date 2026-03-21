@@ -155,12 +155,6 @@ async def trigger_alert(
     entry = await manager.broadcast_alert(message=alert_message, lat=lat, lon=lon, radius_miles=radius, ems_unit_id=ems_unit_id)
     return {"status": "Alert sent", "alert_id": entry["id"], "message": alert_message, "radius_miles": radius, "ws_delivered": entry["ws_sent"], "push_delivered": entry["push_sent"]}
 
-@app.get("/validate-key")
-async def validate_key(api_key: str = Query(...)):
-    keys = load_api_keys()
-    if api_key in keys:
-        return {"valid": True, "unit_id": keys[api_key]}
-    return {"valid": False}
 
 
 @app.get("/status")
