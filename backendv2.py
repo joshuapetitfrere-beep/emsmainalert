@@ -1,5 +1,6 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 from math import radians, cos, sin, asin, sqrt
 from contextlib import asynccontextmanager
@@ -23,6 +24,47 @@ HOSPITALS = [
 ]
 
 AVG_SPEED_MPH = 45
+
+# ── Hospital Passwords ────────────────────────────────────────────────────────
+# Stored as environment variable: HOSPITAL_PASSWORDS
+# Format: "HospitalName:password,HospitalName2:password2"
+# Default passwords are set here and can be overridden via env var or admin page
+DEFAULT_HOSPITAL_PASSWORDS = {
+    "Lakeland Regional Health":       "zdpz6mk3",
+    "Bartow Regional Medical Center": "97adtqf9",
+    "Winter Haven Hospital":          "8yzxkpk8",
+    "South Florida Baptist Hospital": "2rmbzem5",
+    "AdventHealth Heart of Florida":  "ts6xdv6y",
+    "AdventHealth Lake Wales":        "yn99gfzy",
+}
+
+# In-memory password store (loaded from env on startup, updateable via admin)
+hospital_passwords: dict = {}
+
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "sg7thwvc")
+
+
+def load_hospital_passwords():
+    """Load hospital passwords from env var or use defaults."""
+    global hospital_passwords
+    raw = os.environ.get("HOSPITAL_PASSWORDS", "")
+    if raw:
+        for entry in raw.split(","):
+            entry = entry.strip()
+            if ":" in entry:
+                name, pwd = entry.split(":", 1)
+                hospital_passwords[name.strip()] = pwd.strip()
+    if not hospital_passwords:
+        hospital_passwords = dict(DEFAULT_HOSPITAL_PASSWORDS)
+    print(f"[AUTH] Loaded passwords for {len(hospital_passwords)} hospitals")
+
+
+def get_hospital_by_password(password: str) -> Optional[str]:
+    """Returns hospital name if password matches, else None."""
+    for name, pwd in hospital_passwords.items():
+        if pwd == password:
+            return name
+    return None
 
 
 def check_hospital_geofence(lat: float, lon: float) -> Optional[str]:
@@ -85,6 +127,7 @@ async def init_db(pool):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global db_pool
+    load_hospital_passwords()
     if DATABASE_URL:
         db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
         await init_db(db_pool)
@@ -96,7 +139,7 @@ async def lifespan(app: FastAPI):
         await db_pool.close()
 
 
-app = FastAPI(title="EMS Alert Server", version="4.7.0", lifespan=lifespan)
+app = FastAPI(title="EMS Alert Server", version="4.8.0", lifespan=lifespan)
 EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 
 # ── Cooldown ──────────────────────────────────────────────────────────────────
@@ -115,15 +158,7 @@ def update_cooldown(unit_id: str):
     cooldown_tracker[unit_id] = datetime.utcnow()
 
 
-# ── Active alerts & dashboard clients ────────────────────────────────────────
-# active_alerts structure per unit:
-# {
-#   alert_id, lat, lon, prev_lat, prev_lon, radius_miles,
-#   destination_hospital, num_patients, alert_type, activated_at,
-#   trauma,
-#   paused: bool,
-#   pause_reason: str | None,
-# }
+# ── Active alerts & dashboard clients ─────────────────────────────────────────
 active_alerts: dict = {}
 dashboard_clients: List[WebSocket] = []
 
@@ -167,7 +202,7 @@ def build_dashboard_payload() -> dict:
     }
 
 
-# ── Auth ──────────────────────────────────────────────────────────────────────
+# ── EMS API Auth ──────────────────────────────────────────────────────────────
 def load_api_keys() -> dict:
     raw = os.environ.get("EMS_API_KEYS", "")
     keys = {}
@@ -261,7 +296,6 @@ class ConnectionManager:
                 print(f"[POS ERROR] {e}")
 
     async def broadcast_to_civilians(self, payload: str):
-        """Send an arbitrary payload to all connected civilian clients."""
         for c in self.active_clients.copy():
             if not c.is_ems:
                 try:
@@ -457,44 +491,31 @@ async def websocket_endpoint(websocket: WebSocket):
                         radius = 2.0
                         is_paused = False
 
-                    # Geofence check runs regardless of pause state
                     hospital = check_hospital_geofence(lat, lon)
                     if hospital and unit_id in active_alerts:
                         print(f"[GEOFENCE] {unit_id} entered {hospital} — auto-clearing")
                         await manager.broadcast_clear(unit_id, reason=f"arrived:{hospital}")
                     elif not is_paused:
-                        # Only broadcast position if alert is NOT paused
                         await manager.broadcast_ems_position(unit_id, lat, lon, alert_id, radius, prev_lat, prev_lon)
                         await push_dashboard_update()
 
             elif msg_type == "ems_pause":
-                # ── Pause alert broadcasts ────────────────────────────────────
                 unit_id = data.get("unit_id")
                 reason = data.get("reason", "Paused")
                 if unit_id and unit_id in active_alerts:
                     active_alerts[unit_id]["paused"] = True
                     active_alerts[unit_id]["pause_reason"] = reason
-                    # Tell civilians to show standby state
-                    payload = json.dumps({
-                        "type": "ems_pause",
-                        "unit_id": unit_id,
-                        "reason": reason,
-                    })
+                    payload = json.dumps({"type": "ems_pause", "unit_id": unit_id, "reason": reason})
                     await manager.broadcast_to_civilians(payload)
                     await push_dashboard_update()
                     print(f"[PAUSE] {unit_id} — reason: {reason}")
 
             elif msg_type == "ems_resume":
-                # ── Resume alert broadcasts ───────────────────────────────────
                 unit_id = data.get("unit_id")
                 if unit_id and unit_id in active_alerts:
                     active_alerts[unit_id]["paused"] = False
                     active_alerts[unit_id]["pause_reason"] = None
-                    # Tell civilians to restore active alert state
-                    payload = json.dumps({
-                        "type": "ems_resume",
-                        "unit_id": unit_id,
-                    })
+                    payload = json.dumps({"type": "ems_resume", "unit_id": unit_id})
                     await manager.broadcast_to_civilians(payload)
                     await push_dashboard_update()
                     print(f"[RESUME] {unit_id}")
@@ -583,6 +604,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
 
 # ── HTTP Endpoints ────────────────────────────────────────────────────────────
+
 @app.post("/trigger-alert")
 async def trigger_alert(
     lat: float = Query(...),
@@ -620,18 +642,78 @@ async def trigger_alert(
     }
 
 
-
-
 @app.get("/dashboard", response_class=HTMLResponse)
 async def serve_dashboard():
     try:
         with open("dashboard.html", "r") as f:
             return HTMLResponse(content=f.read())
     except FileNotFoundError:
-        return HTMLResponse(
-            content="<h1>dashboard.html not found. Deploy it alongside main.py.</h1>",
-            status_code=404
-        )
+        return HTMLResponse(content="<h1>dashboard.html not found.</h1>", status_code=404)
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def serve_admin():
+    try:
+        with open("admin.html", "r") as f:
+            return HTMLResponse(content=f.read())
+    except FileNotFoundError:
+        return HTMLResponse(content="<h1>admin.html not found.</h1>", status_code=404)
+
+
+# ── Hospital Auth Endpoint ────────────────────────────────────────────────────
+@app.post("/auth/hospital")
+async def hospital_auth(password: str = Query(...)):
+    """Validates a hospital password and returns the hospital name."""
+    hospital = get_hospital_by_password(password)
+    if hospital:
+        return {"valid": True, "hospital": hospital}
+    return JSONResponse(status_code=401, content={"valid": False, "hospital": None})
+
+
+# ── Admin Endpoints ───────────────────────────────────────────────────────────
+@app.get("/admin/status")
+async def admin_status(admin_password: str = Query(...)):
+    if admin_password != ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Invalid admin password")
+    device_count = 0
+    alert_count = 0
+    recent_alerts = []
+    if db_pool:
+        async with db_pool.acquire() as conn:
+            device_count = await conn.fetchval("SELECT COUNT(*) FROM devices")
+            alert_count = await conn.fetchval("SELECT COUNT(*) FROM alerts")
+            rows = await conn.fetch("SELECT * FROM alerts ORDER BY sent_at DESC NULLS LAST LIMIT 10")
+            for r in rows:
+                d = dict(r)
+                d["sent_at"] = str(d["sent_at"]) if d["sent_at"] else parse_ts_from_id(d["id"])
+                recent_alerts.append(d)
+    return {
+        "connected_clients": len(manager.active_clients),
+        "dashboard_clients": len(dashboard_clients),
+        "registered_devices": device_count,
+        "total_alerts_sent": alert_count,
+        "active_responses": len(active_alerts),
+        "active_units": list(active_alerts.keys()),
+        "recent_alerts": recent_alerts,
+        "hospital_passwords": {k: v for k, v in hospital_passwords.items()},
+    }
+
+
+@app.post("/admin/set-password")
+async def set_hospital_password(
+    admin_password: str = Query(...),
+    hospital_name: str = Query(...),
+    new_password: str = Query(...),
+):
+    if admin_password != ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Invalid admin password")
+    if hospital_name not in [h["name"] for h in HOSPITALS]:
+        raise HTTPException(status_code=400, detail=f"Unknown hospital: {hospital_name}")
+    if len(new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    hospital_passwords[hospital_name] = new_password
+    print(f"[ADMIN] Password updated for {hospital_name}")
+    return {"status": "Password updated", "hospital": hospital_name}
 
 
 @app.get("/status")
@@ -692,6 +774,7 @@ async def get_devices():
 @app.get("/hospitals")
 async def get_hospitals():
     return {"hospitals": HOSPITALS}
+
 
 @app.get("/validate-key")
 async def validate_key(api_key: str = Query(...)):
