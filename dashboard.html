@@ -35,7 +35,7 @@
       z-index: 9999;
     }
 
-    /* ── Auth Modal ──────────────────────────────────────────────────────── */
+    /* ── Auth Screen ─────────────────────────────────────────────────────── */
     #auth-screen {
       position: fixed;
       inset: 0;
@@ -61,27 +61,9 @@
       gap: 24px;
     }
 
-    .auth-logo {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 3px;
-      color: var(--red);
-    }
-
-    .auth-title {
-      font-size: 20px;
-      font-weight: 800;
-      color: var(--text);
-      text-align: center;
-    }
-
-    .auth-sub {
-      font-size: 13px;
-      color: var(--dim);
-      text-align: center;
-      margin-top: -16px;
-    }
+    .auth-logo { font-family: var(--font-mono); font-size: 11px; font-weight: 700; letter-spacing: 3px; color: var(--red); }
+    .auth-title { font-size: 20px; font-weight: 800; color: var(--text); text-align: center; }
+    .auth-sub { font-size: 13px; color: var(--dim); text-align: center; margin-top: -16px; }
 
     .auth-input {
       width: 100%;
@@ -122,14 +104,7 @@
     }
 
     .auth-btn:hover { opacity: 0.85; }
-
-    .auth-error {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      color: var(--red);
-      display: none;
-    }
-
+    .auth-error { font-family: var(--font-mono); font-size: 11px; color: var(--red); display: none; }
     .auth-error.visible { display: block; }
 
     /* ── Trauma Banner ───────────────────────────────────────────────────── */
@@ -174,6 +149,23 @@
     .conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); transition: background 0.3s; }
     .conn-dot.live { background: var(--green); box-shadow: 0 0 8px var(--green); }
     .conn-dot.error { background: var(--red); }
+
+    /* Sound toggle button */
+    .sound-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 12px;
+      color: var(--dim);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s;
+      letter-spacing: 1px;
+    }
+    .sound-btn:hover { border-color: var(--muted); color: var(--text); }
+    .sound-btn.on { border-color: var(--green); color: var(--green); }
 
     /* ── Filter bar ──────────────────────────────────────────────────────── */
     .filter-bar { display: flex; align-items: center; gap: 10px; padding: 14px 32px; border-bottom: 1px solid var(--border); background: var(--bg); flex-wrap: wrap; }
@@ -292,6 +284,7 @@
     </div>
     <div class="header-right">
       <span class="clock" id="clock">--:--:--</span>
+      <button class="sound-btn on" id="sound-btn" onclick="toggleSound()">🔔 SOUND ON</button>
       <div class="conn-badge">
         <div class="conn-dot" id="conn-dot"></div>
         <span id="conn-label">Connecting...</span>
@@ -334,7 +327,6 @@
     function submitAuth() {
       const input = document.getElementById('auth-input');
       const error = document.getElementById('auth-error');
-
       if (input.value === DASHBOARD_PASSWORD) {
         sessionStorage.setItem("dashboard_auth", DASHBOARD_PASSWORD);
         document.getElementById('auth-screen').classList.add('hidden');
@@ -348,9 +340,88 @@
       }
     }
 
-    // Check if already authenticated this session
     if (sessionStorage.getItem("dashboard_auth") === DASHBOARD_PASSWORD) {
       document.getElementById('auth-screen').classList.add('hidden');
+    }
+
+    // ── Sound ──────────────────────────────────────────────────────────────
+    let soundEnabled = true;
+    let audioCtx = null;
+
+    function getAudioCtx() {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      return audioCtx;
+    }
+
+    function toggleSound() {
+      soundEnabled = !soundEnabled;
+      const btn = document.getElementById('sound-btn');
+      btn.textContent = soundEnabled ? '🔔 SOUND ON' : '🔕 SOUND OFF';
+      btn.classList.toggle('on', soundEnabled);
+    }
+
+    // Two-tone descending chime for new unit
+    function playNewUnitChime() {
+      if (!soundEnabled) return;
+      try {
+        const ctx = getAudioCtx();
+        const tones = [880, 660]; // descending two tones
+        tones.forEach((freq, i) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, ctx.currentTime + i * 0.3);
+          gain.gain.setValueAtTime(0, ctx.currentTime + i * 0.3);
+          gain.gain.linearRampToValueAtTime(0.4, ctx.currentTime + i * 0.3 + 0.05);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.3 + 0.5);
+          osc.start(ctx.currentTime + i * 0.3);
+          osc.stop(ctx.currentTime + i * 0.3 + 0.5);
+        });
+      } catch (e) {}
+    }
+
+    // Three-tone ascending urgent chime for trauma
+    function playTraumaChime() {
+      if (!soundEnabled) return;
+      try {
+        const ctx = getAudioCtx();
+        const tones = [440, 660, 880]; // ascending three tones — more urgent
+        tones.forEach((freq, i) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, ctx.currentTime + i * 0.25);
+          gain.gain.setValueAtTime(0, ctx.currentTime + i * 0.25);
+          gain.gain.linearRampToValueAtTime(0.5, ctx.currentTime + i * 0.25 + 0.05);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.25 + 0.4);
+          osc.start(ctx.currentTime + i * 0.25);
+          osc.stop(ctx.currentTime + i * 0.25 + 0.4);
+        });
+        // Repeat once after a short pause for trauma urgency
+        setTimeout(() => {
+          if (!soundEnabled) return;
+          tones.forEach((freq, i) => {
+            try {
+              const ctx2 = getAudioCtx();
+              const osc = ctx2.createOscillator();
+              const gain = ctx2.createGain();
+              osc.connect(gain);
+              gain.connect(ctx2.destination);
+              osc.type = 'sine';
+              osc.frequency.setValueAtTime(freq, ctx2.currentTime + i * 0.25);
+              gain.gain.setValueAtTime(0, ctx2.currentTime + i * 0.25);
+              gain.gain.linearRampToValueAtTime(0.5, ctx2.currentTime + i * 0.25 + 0.05);
+              gain.gain.exponentialRampToValueAtTime(0.001, ctx2.currentTime + i * 0.25 + 0.4);
+              osc.start(ctx2.currentTime + i * 0.25);
+              osc.stop(ctx2.currentTime + i * 0.25 + 0.4);
+            } catch (e) {}
+          });
+        }, 1200);
+      } catch (e) {}
     }
 
     // ── State ──────────────────────────────────────────────────────────────
@@ -361,6 +432,10 @@
     let reconnectTimer = null;
     let traumaDismissed = false;
     let lastTraumaId = null;
+
+    // Track known unit IDs and trauma IDs to detect NEW arrivals
+    let knownUnitIds = new Set();
+    let knownTraumaKeys = new Set();
 
     // ── Clock ──────────────────────────────────────────────────────────────
     setInterval(() => {
@@ -378,8 +453,36 @@
         try {
           const data = JSON.parse(e.data);
           if (data.type === 'dashboard_update') {
+            const prevUnits = units;
             units = data.units || [];
             if (data.hospitals && data.hospitals.length) buildFilters(data.hospitals);
+
+            // Detect new units — play new unit chime
+            units.forEach(u => {
+              if (!knownUnitIds.has(u.unit_id)) {
+                knownUnitIds.add(u.unit_id);
+                // Only chime if this is a real update (not initial load)
+                if (prevUnits.length > 0 || knownUnitIds.size > 1) {
+                  playNewUnitChime();
+                }
+              }
+            });
+
+            // Remove units that are no longer active
+            const activeIds = new Set(units.map(u => u.unit_id));
+            knownUnitIds.forEach(id => { if (!activeIds.has(id)) knownUnitIds.delete(id); });
+
+            // Detect new trauma activations — play trauma chime
+            units.forEach(u => {
+              if (u.trauma) {
+                const traumaKey = u.unit_id + u.trauma.activated_at;
+                if (!knownTraumaKeys.has(traumaKey)) {
+                  knownTraumaKeys.add(traumaKey);
+                  playTraumaChime();
+                }
+              }
+            });
+
             checkTraumaBanner();
             render();
           }
@@ -440,14 +543,8 @@
       document.getElementById('trauma-banner').classList.add('visible');
     }
 
-    function hideBanner() {
-      document.getElementById('trauma-banner').classList.remove('visible');
-    }
-
-    function dismissTrauma() {
-      traumaDismissed = true;
-      hideBanner();
-    }
+    function hideBanner() { document.getElementById('trauma-banner').classList.remove('visible'); }
+    function dismissTrauma() { traumaDismissed = true; hideBanner(); }
 
     // ── Filters ────────────────────────────────────────────────────────────
     function buildFilters(list) {
@@ -579,7 +676,7 @@
       }).join('');
     }
 
-    // ── Init — only connect if already authed ──────────────────────────────
+    // ── Init ───────────────────────────────────────────────────────────────
     if (sessionStorage.getItem("dashboard_auth") === DASHBOARD_PASSWORD) {
       connect();
       render();
