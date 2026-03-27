@@ -26,9 +26,6 @@ HOSPITALS = [
 AVG_SPEED_MPH = 45
 
 # ── Hospital Passwords ────────────────────────────────────────────────────────
-# Stored as environment variable: HOSPITAL_PASSWORDS
-# Format: "HospitalName:password,HospitalName2:password2"
-# Default passwords are set here and can be overridden via env var or admin page
 DEFAULT_HOSPITAL_PASSWORDS = {
     "Lakeland Regional Health":       "zdpz6mk3",
     "Bartow Regional Medical Center": "97adtqf9",
@@ -38,14 +35,11 @@ DEFAULT_HOSPITAL_PASSWORDS = {
     "AdventHealth Lake Wales":        "yn99gfzy",
 }
 
-# In-memory password store (loaded from env on startup, updateable via admin)
 hospital_passwords: dict = {}
-
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "sg7thwvc")
 
 
 def load_hospital_passwords():
-    """Load hospital passwords from env var or use defaults."""
     global hospital_passwords
     raw = os.environ.get("HOSPITAL_PASSWORDS", "")
     if raw:
@@ -60,7 +54,6 @@ def load_hospital_passwords():
 
 
 def get_hospital_by_password(password: str) -> Optional[str]:
-    """Returns hospital name if password matches, else None."""
     for name, pwd in hospital_passwords.items():
         if pwd == password:
             return name
@@ -139,7 +132,7 @@ async def lifespan(app: FastAPI):
         await db_pool.close()
 
 
-app = FastAPI(title="EMS Alert Server", version="4.8.0", lifespan=lifespan)
+app = FastAPI(title="EMS Alert Server", version="4.9.0", lifespan=lifespan)
 EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 
 # ── Cooldown ──────────────────────────────────────────────────────────────────
@@ -181,6 +174,7 @@ def build_dashboard_payload() -> dict:
         eta = None
         if alert.get("destination_hospital") and alert.get("lat") and alert.get("lon"):
             eta = calc_eta_minutes(alert["lat"], alert["lon"], alert["destination_hospital"])
+        trauma = alert.get("trauma", None)
         units.append({
             "unit_id": unit_id,
             "alert_id": alert.get("alert_id"),
@@ -191,7 +185,9 @@ def build_dashboard_payload() -> dict:
             "activated_at": alert.get("activated_at"),
             "lat": alert.get("lat"),
             "lon": alert.get("lon"),
-            "trauma": alert.get("trauma", None),
+            "trauma": trauma,
+            "severity": trauma.get("severity") if trauma else None,
+            "reviewed_by": trauma.get("reviewed_by") if trauma else None,
             "paused": alert.get("paused", False),
             "pause_reason": alert.get("pause_reason", None),
         })
@@ -528,25 +524,29 @@ async def websocket_endpoint(websocket: WebSocket):
                     hospital = active_alerts[unit_id].get("destination_hospital")
                     eta = calc_eta_minutes(lat, lon, hospital) if lat and lon and hospital else None
                     trauma = {
-                        "mechanism": data.get("mechanism", "Unknown"),
-                        "num_patients": data.get("num_patients", active_alerts[unit_id].get("num_patients", 1)),
-                        "age": data.get("age", ""),
-                        "sex": data.get("sex", ""),
-                        "vitals": data.get("vitals", ""),
-                        "gcs": data.get("gcs", ""),
-                        "eta_minutes": eta,
-                        "activated_at": datetime.utcnow().isoformat(),
-                        "unit_id": unit_id,
+                        "mechanism":          data.get("mechanism", "Unknown"),
+                        "num_patients":       data.get("num_patients", active_alerts[unit_id].get("num_patients", 1)),
+                        "age":                data.get("age", ""),
+                        "sex":                data.get("sex", ""),
+                        "vitals":             data.get("vitals", ""),
+                        "gcs":                data.get("gcs", ""),
+                        "eta_minutes":        eta,
+                        "activated_at":       datetime.utcnow().isoformat(),
+                        "unit_id":            unit_id,
                         "destination_hospital": hospital,
+                        "severity":           data.get("severity", "Stable"),
+                        "reviewed_by":        data.get("reviewed_by", unit_id),
+                        "raw_transcription":  data.get("raw_transcription", ""),
                     }
                     active_alerts[unit_id]["trauma"] = trauma
-                    print(f"[TRAUMA] {unit_id} → {hospital} | ETA: {eta}min")
+                    print(f"[TRAUMA] {unit_id} → {hospital} | Severity: {trauma['severity']} | ETA: {eta}min")
                     await push_dashboard_update()
                     try:
                         await client.websocket.send_text(json.dumps({
                             "type": "trauma_ack",
                             "unit_id": unit_id,
                             "eta_minutes": eta,
+                            "severity": trauma["severity"],
                         }))
                     except:
                         pass
@@ -660,10 +660,9 @@ async def serve_admin():
         return HTMLResponse(content="<h1>admin.html not found.</h1>", status_code=404)
 
 
-# ── Hospital Auth Endpoint ────────────────────────────────────────────────────
+# ── Hospital Auth ─────────────────────────────────────────────────────────────
 @app.post("/auth/hospital")
 async def hospital_auth(password: str = Query(...)):
-    """Validates a hospital password and returns the hospital name."""
     hospital = get_hospital_by_password(password)
     if hospital:
         return {"valid": True, "hospital": hospital}
