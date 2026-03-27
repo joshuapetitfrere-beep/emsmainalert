@@ -94,7 +94,7 @@
     .card-body { padding:20px; }
     .card-top { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px; }
     .unit-id { font-family:var(--font-mono); font-size:11px; font-weight:700; letter-spacing:2px; color:var(--dim); }
-    .badge-row { display:flex; gap:6px; align-items:center; }
+    .badge-row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
     .alert-type-badge { padding:3px 10px; border-radius:4px; font-family:var(--font-mono); font-size:10px; font-weight:700; letter-spacing:1px; }
     .trauma-badge { padding:3px 10px; border-radius:4px; font-family:var(--font-mono); font-size:10px; font-weight:700; letter-spacing:1px; background:rgba(239,68,68,0.2); color:#f87171; border:1px solid #7f1d1d; animation:pulseBadge 1.2s ease-in-out infinite; }
     @keyframes pulseBadge { 0%,100%{opacity:1} 50%{opacity:0.5} }
@@ -114,10 +114,17 @@
     .trauma-strip-item { display:flex; flex-direction:column; gap:1px; }
     .trauma-strip-label { font-family:var(--font-mono); font-size:8px; letter-spacing:1px; color:#9b1c1c; }
     .trauma-strip-value { font-family:var(--font-mono); font-size:11px; color:#fca5a5; font-weight:600; }
-    .card-footer { display:flex; justify-content:space-between; align-items:center; padding-top:12px; border-top:1px solid var(--border); }
+    .card-footer { display:flex; justify-content:space-between; align-items:flex-end; padding-top:12px; border-top:1px solid var(--border); }
     .activated-label { font-family:var(--font-mono); font-size:10px; color:var(--muted); }
+    .reviewed-by { font-family:var(--font-mono); font-size:10px; color:var(--green); font-weight:600; margin-top:3px; }
     .live-badge { display:flex; align-items:center; gap:5px; font-family:var(--font-mono); font-size:10px; font-weight:700; color:var(--green); letter-spacing:1px; }
     .live-dot { width:6px; height:6px; border-radius:50%; background:var(--green); animation:pulse 1.2s ease-in-out infinite; }
+
+    /* Severity badges */
+    .severity-badge { font-family:var(--font-mono); font-size:9px; font-weight:700; letter-spacing:2px; padding:3px 10px; border-radius:4px; }
+    .severity-Critical { background:rgba(239,68,68,0.15); border:1px solid #7f1d1d; color:#f87171; animation:pulseBadge 1.2s ease-in-out infinite; }
+    .severity-Serious  { background:rgba(245,158,11,0.15); border:1px solid #92400e; color:#fcd34d; }
+    .severity-Stable   { background:rgba(34,197,94,0.15);  border:1px solid #166534; color:#4ade80; }
 
     .type-Medical  { background:rgba(59,130,246,0.15);  color:#60a5fa; }
     .type-Trauma   { background:rgba(239,68,68,0.15);   color:#f87171; }
@@ -202,7 +209,7 @@
     </div>
   </div>
 
-  <!-- Filter bar — hidden for hospital-specific logins -->
+  <!-- Filter bar -->
   <div class="filter-bar" id="filter-bar">
     <span class="filter-label">Filter</span>
     <button class="filter-btn active" data-hospital="ALL" onclick="setFilter('ALL')">All Hospitals</button>
@@ -219,9 +226,8 @@
   </main>
 
   <script>
-    // ── Auth ───────────────────────────────────────────────────────────────
     const MASTER_PASSWORD = "cpath42";
-    let authedHospital = null; // null = all hospitals
+    let authedHospital = null;
 
     function submitAuth() {
       const input = document.getElementById('auth-input');
@@ -229,18 +235,15 @@
       const pwd = input.value.trim();
       if (!pwd) return;
 
-      // Check master password first
       if (pwd === MASTER_PASSWORD) {
         authedHospital = null;
         sessionStorage.setItem("dashboard_auth", pwd);
         sessionStorage.setItem("dashboard_hospital", "ALL");
         document.getElementById('auth-screen').classList.add('hidden');
-        connect();
-        render();
+        connect(); render();
         return;
       }
 
-      // Otherwise check hospital password via backend
       fetch(`/auth/hospital?password=${encodeURIComponent(pwd)}`, { method: 'POST' })
         .then(r => r.json())
         .then(data => {
@@ -250,13 +253,11 @@
             sessionStorage.setItem("dashboard_auth", pwd);
             sessionStorage.setItem("dashboard_hospital", data.hospital);
             document.getElementById('auth-screen').classList.add('hidden');
-            // Show hospital badge and hide filter bar
             const badge = document.getElementById('hospital-badge');
             badge.textContent = data.hospital;
             badge.style.display = 'inline-block';
             document.getElementById('filter-bar').style.display = 'none';
-            connect();
-            render();
+            connect(); render();
           } else {
             input.classList.add('error');
             error.classList.add('visible');
@@ -272,7 +273,6 @@
         });
     }
 
-    // Restore session
     const savedAuth = sessionStorage.getItem("dashboard_auth");
     const savedHospital = sessionStorage.getItem("dashboard_hospital");
     if (savedAuth) {
@@ -287,7 +287,6 @@
       document.getElementById('auth-screen').classList.add('hidden');
     }
 
-    // ── Sound ──────────────────────────────────────────────────────────────
     let soundEnabled = true;
     let audioCtx = null;
 
@@ -346,7 +345,6 @@
       setTimeout(playTones, 1200);
     }
 
-    // ── State ──────────────────────────────────────────────────────────────
     let units = [];
     let hospitals = [];
     let activeFilter = 'ALL';
@@ -362,7 +360,6 @@
         new Date().toLocaleTimeString('en-US', { hour12: false });
     }, 1000);
 
-    // ── WebSocket ──────────────────────────────────────────────────────────
     const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/dashboard';
 
     function connect() {
@@ -376,12 +373,10 @@
             units = data.units || [];
             if (data.hospitals && data.hospitals.length) buildFilters(data.hospitals);
 
-            // Detect new units
             units.forEach(u => {
               if (!knownUnitIds.has(u.unit_id)) {
                 knownUnitIds.add(u.unit_id);
                 if (prevUnits.length > 0 || knownUnitIds.size > 1) {
-                  // Only chime if relevant to authed hospital
                   if (!authedHospital || u.destination_hospital === authedHospital) {
                     playNewUnitChime();
                   }
@@ -392,7 +387,6 @@
             const activeIds = new Set(units.map(u => u.unit_id));
             knownUnitIds.forEach(id => { if (!activeIds.has(id)) knownUnitIds.delete(id); });
 
-            // Detect new trauma
             units.forEach(u => {
               if (u.trauma) {
                 const traumaKey = u.unit_id + u.trauma.activated_at;
@@ -419,7 +413,6 @@
       document.getElementById('conn-label').textContent = live ? 'Live' : 'Reconnecting...';
     }
 
-    // ── Trauma Banner ──────────────────────────────────────────────────────
     function checkTraumaBanner() {
       const relevant = units.filter(u => {
         if (!u.trauma) return false;
@@ -437,14 +430,16 @@
     function showBanner(unit) {
       const t = unit.trauma;
       const fields = [
-        { label: 'UNIT', value: unit.unit_id },
-        { label: 'ETA', value: t.eta_minutes != null ? t.eta_minutes + ' min' : '--', highlight: true },
-        { label: 'MECHANISM', value: t.mechanism || '--' },
-        { label: 'PATIENTS', value: t.num_patients || 1 },
-        { label: 'AGE / SEX', value: [t.age, t.sex].filter(Boolean).join(' / ') || '--' },
-        { label: 'VITALS', value: t.vitals || '--' },
-        { label: 'GCS', value: t.gcs || '--' },
-        { label: 'HOSPITAL', value: t.destination_hospital || '--' },
+        { label: 'UNIT',        value: unit.unit_id },
+        { label: 'ETA',         value: t.eta_minutes != null ? t.eta_minutes + ' min' : '--', highlight: true },
+        { label: 'SEVERITY',    value: t.severity || '--' },
+        { label: 'MECHANISM',   value: t.mechanism || '--' },
+        { label: 'PATIENTS',    value: t.num_patients || 1 },
+        { label: 'AGE / SEX',   value: [t.age, t.sex].filter(Boolean).join(' / ') || '--' },
+        { label: 'VITALS',      value: t.vitals || '--' },
+        { label: 'GCS',         value: t.gcs || '--' },
+        { label: 'REVIEWED BY', value: t.reviewed_by || '--' },
+        { label: 'HOSPITAL',    value: t.destination_hospital || '--' },
       ];
       document.getElementById('trauma-fields').innerHTML = fields.map(f => `
         <div class="trauma-field">
@@ -457,10 +452,9 @@
     function hideBanner() { document.getElementById('trauma-banner').classList.remove('visible'); }
     function dismissTrauma() { traumaDismissed = true; hideBanner(); }
 
-    // ── Filters ────────────────────────────────────────────────────────────
     function buildFilters(list) {
       hospitals = list;
-      if (authedHospital) return; // hospital-specific login — no filter bar needed
+      if (authedHospital) return;
       const bar = document.getElementById('filter-bar');
       bar.querySelectorAll('[data-hospital]:not([data-hospital="ALL"])').forEach(b => b.remove());
       list.forEach(h => {
@@ -480,7 +474,6 @@
       render();
     }
 
-    // ── Helpers ────────────────────────────────────────────────────────────
     function etaClass(min) {
       if (min == null) return '';
       if (min <= 5) return 'eta-critical';
@@ -498,7 +491,6 @@
       return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
-    // ── Render ─────────────────────────────────────────────────────────────
     function render() {
       const filtered = activeFilter === 'ALL' ? units : units.filter(u => u.destination_hospital === activeFilter);
       const empty = document.getElementById('empty');
@@ -521,12 +513,14 @@
       });
 
       cards.innerHTML = filtered.map(u => {
-        const type = u.alert_type || 'Other';
-        const eta = u.eta_minutes;
+        const type   = u.alert_type || 'Other';
+        const eta    = u.eta_minutes;
         const etaCls = etaClass(eta);
         const etaTxt = eta != null ? eta : '--';
-        const pts = u.num_patients || 1;
-        const hasT = !!u.trauma;
+        const pts    = u.num_patients || 1;
+        const hasT   = !!u.trauma;
+        const sev    = u.severity || (hasT ? u.trauma.severity : null);
+        const revBy  = u.reviewed_by || (hasT ? u.trauma.reviewed_by : null);
 
         const traumaStrip = hasT ? `
           <div class="trauma-strip">
@@ -546,6 +540,7 @@
               <div class="card-top">
                 <span class="unit-id">${escHtml(u.unit_id)}</span>
                 <div class="badge-row">
+                  ${sev ? `<span class="severity-badge severity-${escHtml(sev)}">● ${escHtml(sev).toUpperCase()}</span>` : ''}
                   ${hasT ? '<span class="trauma-badge">TRAUMA</span>' : ''}
                   <span class="alert-type-badge type-${type}">${escHtml(type)}</span>
                 </div>
@@ -557,7 +552,10 @@
               </div>
               ${traumaStrip}
               <div class="card-footer">
-                <span class="activated-label">Activated ${formatTime(u.activated_at)}</span>
+                <div style="display:flex;flex-direction:column;gap:3px;">
+                  <span class="activated-label">Activated ${formatTime(u.activated_at)}</span>
+                  ${revBy ? `<span class="reviewed-by">✓ Reviewed by ${escHtml(revBy)}</span>` : ''}
+                </div>
                 <div class="live-badge"><div class="live-dot"></div>LIVE</div>
               </div>
             </div>
@@ -565,7 +563,6 @@
       }).join('');
     }
 
-    // ── Init ───────────────────────────────────────────────────────────────
     if (sessionStorage.getItem("dashboard_auth")) {
       connect();
       render();
