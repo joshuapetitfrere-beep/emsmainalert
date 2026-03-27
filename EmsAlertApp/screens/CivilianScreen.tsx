@@ -66,27 +66,23 @@ export default function CivilianScreen({ onExit }: Props) {
   const [showAlerts, setShowAlerts]         = useState(false);
   const [directionLabel, setDirectionLabel] = useState<string>("");
   const [directionArrow, setDirectionArrow] = useState<string>("");
-  // Pause state
   const [alertPaused, setAlertPaused]       = useState(false);
   const [pauseReason, setPauseReason]       = useState<string>("");
 
-  const wsRef             = useRef<WebSocket | null>(null);
-  const locationInterval  = useRef<ReturnType<typeof setInterval> | null>(null);
-  const reconnectTimeout  = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const userHeadingRef    = useRef<number>(0);
-  const emsPositionRef    = useRef<EMSPosition | null>(null);
-  // Keep a ref to activeAlert so we can restore it on resume
-  const activeAlertRef    = useRef<EMSAlert | null>(null);
-
-  // ── Effects ────────────────────────────────────────────────────────────────
+  const wsRef            = useRef<WebSocket | null>(null);
+  const reconnectTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const locationSub      = useRef<Location.LocationSubscription | null>(null);
+  const userHeadingRef   = useRef<number>(0);
+  const emsPositionRef   = useRef<EMSPosition | null>(null);
+  const activeAlertRef   = useRef<EMSAlert | null>(null);
 
   useEffect(() => {
     requestLocationPermission();
     connectWebSocket();
     return () => {
       wsRef.current?.close();
-      if (locationInterval.current) clearInterval(locationInterval.current);
       if (reconnectTimeout.current) clearTimeout(reconnectTimeout.current);
+      locationSub.current?.remove();
     };
   }, []);
 
@@ -144,17 +140,14 @@ export default function CivilianScreen({ onExit }: Props) {
         }
 
         if (data.type === "ems_pause") {
-          // Suppress the active alert overlay — show standby state instead
           setAlertPaused(true);
           setPauseReason(data.reason || "Alert paused by EMS");
           Vibration.cancel();
         }
 
         if (data.type === "ems_resume") {
-          // Restore the alert overlay
           setAlertPaused(false);
           setPauseReason("");
-          // Re-trigger alert if we still have one
           if (activeAlertRef.current) {
             setActiveAlert(activeAlertRef.current);
             Vibration.vibrate([300, 150, 300]);
@@ -181,26 +174,41 @@ export default function CivilianScreen({ onExit }: Props) {
     };
   }
 
-  // ── Location ───────────────────────────────────────────────────────────────
+  // ── Location — watchPositionAsync fires in foreground AND background ────────
 
   async function requestLocationPermission() {
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== "granted") {
+    // Request foreground permission first
+    const { status: fgStatus } = await Location.requestForegroundPermissionsAsync();
+    if (fgStatus !== "granted") {
       setLocationStatus("Permission denied");
       return;
     }
-    setLocationStatus("Tracking active ✓");
-    locationInterval.current = setInterval(async () => {
-      if (wsRef.current?.readyState !== WebSocket.OPEN) return;
-      try {
-        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        wsRef.current.send(JSON.stringify({
-          type: "update",
-          lat: loc.coords.latitude,
-          lon: loc.coords.longitude,
-        }));
-      } catch (e) {}
-    }, 10000);
+
+    // Request background permission (needed for screen-off tracking on native builds)
+    const { status: bgStatus } = await Location.requestBackgroundPermissionsAsync();
+    const hasBackground = bgStatus === "granted";
+
+    setLocationStatus(hasBackground ? "Tracking active ✓" : "Foreground only ✓");
+
+    // watchPositionAsync fires continuously — no need for setInterval
+    // timeInterval: minimum ms between updates (30s background, 10s foreground)
+    // distanceInterval: only fire if moved at least 15 meters (saves battery)
+    locationSub.current = await Location.watchPositionAsync(
+      {
+        accuracy: Location.Accuracy.Balanced,
+        timeInterval: 10000,       // at most every 10 seconds
+        distanceInterval: 15,      // only if moved 15+ meters
+      },
+      (loc) => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({
+            type: "update",
+            lat: loc.coords.latitude,
+            lon: loc.coords.longitude,
+          }));
+        }
+      }
+    );
   }
 
   // ── Alert handlers ─────────────────────────────────────────────────────────
@@ -227,7 +235,6 @@ export default function CivilianScreen({ onExit }: Props) {
 
   if (showAlerts) return <ActiveAlertsScreen onBack={() => setShowAlerts(false)} />;
 
-  // Alert paused — show a calm standby screen instead of full red overlay
   if (alertPaused && activeAlertRef.current) {
     return (
       <View style={styles.pausedOverlay}>
@@ -245,7 +252,6 @@ export default function CivilianScreen({ onExit }: Props) {
     );
   }
 
-  // Active alert overlay
   if (activeAlert && !alertPaused) {
     return (
       <View style={styles.alertOverlay}>
@@ -271,7 +277,6 @@ export default function CivilianScreen({ onExit }: Props) {
     );
   }
 
-  // Default civilian home screen
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
@@ -313,8 +318,6 @@ export default function CivilianScreen({ onExit }: Props) {
   );
 }
 
-// ── Row ───────────────────────────────────────────────────────────────────────
-
 function Row({ label, value, ok }: { label: string; value: string; ok: boolean }) {
   return (
     <View style={styles.row}>
@@ -323,8 +326,6 @@ function Row({ label, value, ok }: { label: string; value: string; ok: boolean }
     </View>
   );
 }
-
-// ── Styles ────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   container:        { flex: 1, backgroundColor: "#0f172a" },
@@ -343,7 +344,6 @@ const styles = StyleSheet.create({
   infoText:         { fontSize: 14, color: "#94a3b8", lineHeight: 22 },
   alertsBtn:        { backgroundColor: "#1a0a0a", borderRadius: 14, padding: 16, alignItems: "center", borderWidth: 1, borderColor: "#7f1d1d" },
   alertsBtnText:    { color: "#ef4444", fontWeight: "700", fontSize: 15 },
-  // Active alert overlay
   alertOverlay:     { flex: 1, backgroundColor: "#dc2626", alignItems: "center", justifyContent: "center", padding: 32 },
   alertIcon:        { fontSize: 80, marginBottom: 20 },
   alertTitle:       { fontSize: 34, fontWeight: "900", color: "#fff", textAlign: "center", letterSpacing: 1, lineHeight: 40, marginBottom: 24 },
@@ -355,7 +355,6 @@ const styles = StyleSheet.create({
   alertInstruction: { fontSize: 14, color: "#fee2e2", textAlign: "center", lineHeight: 22, marginBottom: 48 },
   ackButton:        { backgroundColor: "#fff", borderRadius: 16, paddingVertical: 20, paddingHorizontal: 40, width: "100%", alignItems: "center" },
   ackButtonText:    { color: "#dc2626", fontSize: 18, fontWeight: "900" },
-  // Paused overlay
   pausedOverlay:    { flex: 1, backgroundColor: "#1c1400", alignItems: "center", justifyContent: "center", padding: 32 },
   pausedIcon:       { fontSize: 64, marginBottom: 16 },
   pausedTitle:      { fontSize: 28, fontWeight: "900", color: "#f59e0b", letterSpacing: 2, marginBottom: 8 },

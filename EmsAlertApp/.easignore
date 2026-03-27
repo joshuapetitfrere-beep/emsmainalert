@@ -1,0 +1,6 @@
+kivy311/
+.venv/
+civilian-app/
+__pycache__/
+*.pyc
+node_modules/

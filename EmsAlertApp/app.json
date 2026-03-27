@@ -2,6 +2,12 @@
   "expo": {
     "name": "EmsAlertApp",
     "slug": "EmsAlertApp",
-    "version": "1.0.0"
+    "version": "1.0.0",
+    "extra": {
+      "eas": {
+        "bundleIdentifier": "com.joshuapetitfrere.emsalert",
+        "projectId": "e70aded8-c91a-4439-91e6-c6a3981b2784"
+      }
+    }
   }
 }
