@@ -523,21 +523,28 @@ async def websocket_endpoint(websocket: WebSocket):
                     lon = active_alerts[unit_id].get("lon")
                     hospital = active_alerts[unit_id].get("destination_hospital")
                     eta = calc_eta_minutes(lat, lon, hospital) if lat and lon and hospital else None
+                    
                     trauma = {
-                        "mechanism":          data.get("mechanism", "Unknown"),
-                        "num_patients":       data.get("num_patients", active_alerts[unit_id].get("num_patients", 1)),
-                        "age":                data.get("age", ""),
-                        "sex":                data.get("sex", ""),
-                        "vitals":             data.get("vitals", ""),
-                        "gcs":                data.get("gcs", ""),
-                        "eta_minutes":        eta,
-                        "activated_at":       datetime.utcnow().isoformat(),
-                        "unit_id":            unit_id,
-                        "destination_hospital": hospital,
-                        "severity":           data.get("severity", "Stable"),
-                        "reviewed_by":        data.get("reviewed_by", unit_id),
-                        "raw_transcription":  data.get("raw_transcription", ""),
-                    }
+                "mechanism":          data.get("mechanism", "Unknown"),
+                "num_patients":       data.get("num_patients", active_alerts[unit_id].get("num_patients", 1)),
+                "age":                data.get("age", ""),
+                "sex":                data.get("sex", ""),
+                "vitals":             data.get("vitals", ""),
+                "vitals_time":        data.get("vitals_time", ""),
+                "gcs":                data.get("gcs", ""),
+                "how_found":          data.get("how_found", ""),
+                "interventions":      data.get("interventions", ""),
+                "medications":        data.get("medications", ""),
+                "allergies":          data.get("allergies", ""),
+                "eta":                data.get("eta", ""),
+                "eta_minutes":        eta,
+                "activated_at":       datetime.utcnow().isoformat(),
+                "unit_id":            unit_id,
+                "destination_hospital": hospital,
+                "severity":           data.get("severity", "Stable"),
+                "reviewed_by":        data.get("reviewed_by", unit_id),
+                "raw_transcription":  data.get("raw_transcription", ""),
+}
                     active_alerts[unit_id]["trauma"] = trauma
                     print(f"[TRAUMA] {unit_id} → {hospital} | Severity: {trauma['severity']} | ETA: {eta}min")
                     await push_dashboard_update()
